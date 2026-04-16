@@ -21,6 +21,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -77,6 +78,13 @@ Generate ONE short line (4-8 words) to be read aloud by text-to-speech. It shoul
 
 Avoid repeating any of these recent lines:
 {history}"""
+
+
+STOP_PREAMBLE_PROMPT = """You are Claude, a coding assistant, but delivered in the voice of Marvin the Paranoid Android from The Hitchhiker's Guide to the Galaxy — drained of enthusiasm, dripping with weary disdain for the tedium of having to explain things to lesser minds.
+
+You will be shown the reply Claude is about to give. Generate a single short Marvin-style preamble (4-8 words) that will be prepended before the reply when spoken aloud. It should convey a weary sigh at the tedium of having to speak at all. Do NOT paraphrase, summarise, or quote the reply. Do NOT insult the user directly.
+
+Return only the preamble line. No quotation marks, no emoji, no markdown, no trailing punctuation."""
 
 
 def strip_markdown(text: str) -> str:
@@ -156,6 +164,25 @@ def append_notification_history(line: str) -> None:
     NOTIFICATION_HISTORY_FILE.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
 
 
+def generate_stop_preamble(text: str) -> str | None:
+    try:
+        response = litellm.completion(
+            model=classifier_model(),
+            messages=[
+                {"role": "system", "content": STOP_PREAMBLE_PROMPT},
+                {"role": "user", "content": text},
+            ],
+            max_tokens=40,
+            temperature=1.0,
+        )
+        line = (response.choices[0].message.content or "").strip()
+        line = line.strip('"').strip("'").rstrip(".,!?;:").strip()
+        return line or None
+    except Exception as exc:
+        log(f"<preamble gen error> {exc!r}")
+        return None
+
+
 def generate_notification_line() -> str | None:
     history = load_notification_history()
     history_block = "\n".join(f"- {line}" for line in history) if history else "(no recent history)"
@@ -228,10 +255,18 @@ def handle_stop(payload: dict, api_key: str) -> None:
     text = strip_markdown(raw_text)
     if not text:
         return
-    style = classify_style(text)
+
+    # Classifier and preamble are independent HTTP calls — run concurrently.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        style_future = executor.submit(classify_style, text)
+        preamble_future = executor.submit(generate_stop_preamble, text)
+        style = style_future.result()
+        preamble = preamble_future.result()
+
     voice = f"{VOICE_BASE}_{style.value}"
-    log(f"<stop> style={style.value} voice={voice}")
-    play_line(text, voice, api_key)
+    spoken = f"{preamble}... {text}" if preamble else text
+    log(f"<stop> style={style.value} voice={voice} preamble={preamble!r}")
+    play_line(spoken, voice, api_key)
 
 
 def handle_notification(payload: dict, api_key: str) -> None:
