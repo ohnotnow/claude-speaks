@@ -3,3 +3,4 @@
 .env
 .ait*
 stop-hook.log
+notification-history.txt
