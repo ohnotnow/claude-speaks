@@ -17,6 +17,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import urllib.error
@@ -225,24 +226,50 @@ def synthesise(text: str, voice: str, api_key: str) -> bytes | None:
     return base64.b64decode(audio_b64) if audio_b64 else None
 
 
-def play_line(text: str, voice: str, api_key: str) -> None:
+def _safe_synthesise(text: str, voice: str, api_key: str) -> bytes | None:
     try:
-        audio = synthesise(text, voice, api_key)
+        return synthesise(text, voice, api_key)
     except urllib.error.HTTPError as exc:
         log(f"<mistral http error> {exc.code} {exc.read().decode('utf-8', 'replace')}")
-        return
+        return None
     except Exception as exc:
         log(f"<mistral error> {exc!r}")
+        return None
+
+
+def play_clips(clips: list[tuple[str, str]], api_key: str, gap_seconds: float = 0.0) -> None:
+    """Synthesise each (text, voice) pair in parallel, then play sequentially.
+
+    A small gap_seconds between clips gives Marvin his breath before gritting
+    his teeth and reading the actual reply.
+    """
+    if not clips:
         return
 
-    if not audio:
-        log("<mistral> no audio_data in response")
+    with ThreadPoolExecutor(max_workers=max(len(clips), 1)) as executor:
+        futures = [executor.submit(_safe_synthesise, text, voice, api_key) for text, voice in clips]
+        audio_blobs = [f.result() for f in futures]
+
+    filepaths: list[str] = []
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    for i, audio in enumerate(audio_blobs):
+        if not audio:
+            continue
+        path = Path(f"/tmp/claude-speaks-{stamp}-{i}.mp3")
+        path.write_bytes(audio)
+        filepaths.append(str(path))
+
+    if not filepaths:
         return
 
-    filepath = Path(f"/tmp/claude-speaks-{datetime.now():%Y%m%d-%H%M%S}.mp3")
-    filepath.write_bytes(audio)
+    parts: list[str] = []
+    for i, path in enumerate(filepaths):
+        if i > 0 and gap_seconds > 0:
+            parts.append(f"sleep {gap_seconds}")
+        parts.append(f"afplay {shlex.quote(path)}")
+
     subprocess.Popen(
-        ["afplay", str(filepath)],
+        ["sh", "-c", "; ".join(parts)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -264,9 +291,14 @@ def handle_stop(payload: dict, api_key: str) -> None:
         preamble = preamble_future.result()
 
     voice = f"{VOICE_BASE}_{style.value}"
-    spoken = f"{preamble}... {text}" if preamble else text
     log(f"<stop> style={style.value} voice={voice} preamble={preamble!r}")
-    play_line(spoken, voice, api_key)
+
+    clips: list[tuple[str, str]] = []
+    if preamble:
+        # Preamble gets its own sentence closure so the TTS falls properly.
+        clips.append((f"{preamble}.", NOTIFICATION_VOICE))
+    clips.append((text, voice))
+    play_clips(clips, api_key, gap_seconds=0.35)
 
 
 def handle_notification(payload: dict, api_key: str) -> None:
@@ -275,7 +307,7 @@ def handle_notification(payload: dict, api_key: str) -> None:
         return
     log(f"<notification> {line}")
     append_notification_history(line)
-    play_line(line, NOTIFICATION_VOICE, api_key)
+    play_clips([(line, NOTIFICATION_VOICE)], api_key)
 
 
 def main() -> None:
