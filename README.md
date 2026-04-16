@@ -8,14 +8,13 @@ It's a [Claude Code Stop hook](https://docs.claude.com/en/docs/claude-code/hooks
 that:
 
 1. Catches the `last_assistant_message` when Claude finishes a turn.
-2. Strips markdown and drops fenced code blocks (Jane doesn't need to read
-   your curl snippets aloud).
+2. Strips markdown and drops fenced code blocks
 3. If the reply runs longer than about 25 words, asks a small LLM to rewrite
    it into a TTS-friendly version — keeping the technical point but dropping
    verbose function signatures, argument values, absolute file paths, and
    other detail that sounds ugly spoken.
 4. Asks a small LLM (Mistral Small, via LiteLLM) to classify the tone as
-   one of the nine emotional styles Mistral's TTS supports for the Jane voice.
+   one of the nine emotional styles Mistral's TTS supports for the 'Jane' voice.
 5. Synthesises audio via Mistral's `/v1/audio/speech` using the matching
    voice (e.g. `gb_jane_curious`, `gb_jane_confident`).
 6. Plays it through `afplay` as a detached subprocess.
@@ -62,7 +61,7 @@ Then wire it up as a Stop hook in your Claude Code settings
 }
 ```
 
-Restart your Claude Code session and Jane should start speaking back.
+Restart your Claude Code session and Claude should start speaking back.
 
 ## Configuration
 
