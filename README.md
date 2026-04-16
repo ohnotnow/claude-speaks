@@ -10,11 +10,15 @@ that:
 1. Catches the `last_assistant_message` when Claude finishes a turn.
 2. Strips markdown and drops fenced code blocks (Jane doesn't need to read
    your curl snippets aloud).
-3. Asks a small LLM (Mistral Small, via LiteLLM) to classify the tone as
+3. If the reply runs longer than about 25 words, asks a small LLM to rewrite
+   it into a TTS-friendly version — keeping the technical point but dropping
+   verbose function signatures, argument values, absolute file paths, and
+   other detail that sounds ugly spoken.
+4. Asks a small LLM (Mistral Small, via LiteLLM) to classify the tone as
    one of the nine emotional styles Mistral's TTS supports for the Jane voice.
-4. Synthesises audio via Mistral's `/v1/audio/speech` using the matching
+5. Synthesises audio via Mistral's `/v1/audio/speech` using the matching
    voice (e.g. `gb_jane_curious`, `gb_jane_confident`).
-5. Plays it through `afplay` as a detached subprocess.
+6. Plays it through `afplay` as a detached subprocess.
 
 ## Requirements
 
