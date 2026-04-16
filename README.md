@@ -66,6 +66,8 @@ Restart your Claude Code session and Jane should start speaking back.
 |---|---|---|
 | `MISTRAL_API_KEY` | — | Required. Used for both classifier and TTS. |
 | `CLASSIFIER_MODEL` | `mistral/mistral-small-latest` | Any LiteLLM-supported model. Try `mistral/ministral-3b-latest` for speed. |
+| `VOICE_BASE` | `gb_jane` | Prefix for the main reading voice. Swap to `gb_oliver`, `gb_paul`, `fr_marie`, etc. |
+| `VOICE_MONOLOGUE` | `<VOICE_BASE>_sarcasm` | Full voice id for Marvin's internal-monologue bits (the preamble on Stop, and idle-waiting Notifications). Try `fr_marie_sad` for proper Paranoid Android vibes. |
 
 Jane's nine emotional styles: `neutral`, `sarcasm`, `confused`, `shameful`,
 `sad`, `jealousy`, `frustrated`, `curious`, `confident`. The classifier is
@@ -74,7 +76,8 @@ other flavours when Claude's reply genuinely calls for it.
 
 ## Known rough edges
 
-- Hardcoded to `gb_jane`. Swapping to Paul/Oliver/Marie is a one-line edit.
+- Voices are configured via env vars (see Configuration), but the nine-style
+  enum still assumes Jane's flavour set — other voices may not have all nine.
 - Markdown stripping is regex-based and unsubtle.
 - The hook blocks for roughly 2–3 seconds while the classifier and TTS
   calls complete. Playback itself is detached and non-blocking.

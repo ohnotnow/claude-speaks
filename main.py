@@ -37,8 +37,7 @@ NOTIFICATION_HISTORY_MAX = 10
 
 MISTRAL_TTS_URL = "https://api.mistral.ai/v1/audio/speech"
 MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603"
-VOICE_BASE = "gb_jane"
-NOTIFICATION_VOICE = f"{VOICE_BASE}_sarcasm"
+DEFAULT_VOICE_BASE = "gb_jane"
 MAX_SPEAK_CHARS = 800
 
 
@@ -126,6 +125,16 @@ def log(entry: object) -> None:
 
 def classifier_model() -> str:
     return os.environ.get("CLASSIFIER_MODEL", "mistral/mistral-small-latest")
+
+
+def voice_base() -> str:
+    """Prefix for the main reading voice — e.g. `gb_jane`, `gb_oliver`, `fr_marie`."""
+    return os.environ.get("VOICE_BASE", DEFAULT_VOICE_BASE)
+
+
+def voice_monologue() -> str:
+    """Full voice id for Marvin's internal-monologue bits (preamble + notifications)."""
+    return os.environ.get("VOICE_MONOLOGUE", f"{voice_base()}_sarcasm")
 
 
 def classify_style(text: str) -> VoiceStyle:
@@ -290,13 +299,13 @@ def handle_stop(payload: dict, api_key: str) -> None:
         style = style_future.result()
         preamble = preamble_future.result()
 
-    voice = f"{VOICE_BASE}_{style.value}"
+    voice = f"{voice_base()}_{style.value}"
     log(f"<stop> style={style.value} voice={voice} preamble={preamble!r}")
 
     clips: list[tuple[str, str]] = []
     if preamble:
         # Preamble gets its own sentence closure so the TTS falls properly.
-        clips.append((f"{preamble}.", NOTIFICATION_VOICE))
+        clips.append((f"{preamble}.", voice_monologue()))
     clips.append((text, voice))
     play_clips(clips, api_key, gap_seconds=0.35)
 
@@ -307,7 +316,7 @@ def handle_notification(payload: dict, api_key: str) -> None:
         return
     log(f"<notification> {line}")
     append_notification_history(line)
-    play_clips([(line, NOTIFICATION_VOICE)], api_key)
+    play_clips([(line, voice_monologue())], api_key)
 
 
 def main() -> None:
