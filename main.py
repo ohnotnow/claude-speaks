@@ -39,6 +39,7 @@ MISTRAL_TTS_URL = "https://api.mistral.ai/v1/audio/speech"
 MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603"
 DEFAULT_VOICE_BASE = "gb_jane"
 MAX_SPEAK_CHARS = 800
+SUMMARY_WORD_THRESHOLD = 25
 
 
 class VoiceStyle(str, Enum):
@@ -85,6 +86,30 @@ STOP_PREAMBLE_PROMPT = """You are Claude, a coding assistant, but delivered in t
 You will be shown the reply Claude is about to give. Generate a single short Marvin-style preamble (4-8 words) that will be prepended before the reply when spoken aloud. It should convey a weary sigh at the tedium of having to speak at all. Do NOT paraphrase, summarise, or quote the reply. Do NOT insult the user directly.
 
 Return only the preamble line. No quotation marks, no emoji, no markdown, no trailing punctuation."""
+
+
+SUMMARY_PROMPT = """You are rewriting a coding assistant's reply to make it pleasant to hear read aloud by text-to-speech. Markdown has already been stripped.
+
+Preserve the technical point but drop fiddly detail that sounds ugly spoken:
+
+- Keep the core meaning and any actionable decisions.
+- Drop verbose function signatures, argument values, flag lists, absolute file paths, and long lists of similar items.
+- Keep bare function names and short file names — just strip the noise around them.
+- Keep the same first-person tone as the original.
+- Do NOT add preamble, framing, or closing remarks. Return ONLY the rewritten prose.
+- Do NOT use markdown, quotation marks, or emoji.
+
+Examples:
+Input: We call some_function(blah=2, thing=4) to fix it.
+Output: We call some_function to fix it.
+
+Input: Edit line 42 in /Users/bob/project/src/foo.py and change the timeout.
+Output: Edit line 42 in foo.py and change the timeout.
+
+Input: Run uv run --project /path/to/project main.py --flag value from the terminal.
+Output: Run the main script from the terminal.
+
+Return only the rewritten text, nothing else."""
 
 
 def strip_markdown(text: str) -> str:
@@ -172,6 +197,34 @@ def append_notification_history(line: str) -> None:
     history.append(line)
     trimmed = history[-NOTIFICATION_HISTORY_MAX:]
     NOTIFICATION_HISTORY_FILE.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
+
+
+def summarise_for_tts(text: str) -> str:
+    """Rewrite long replies into a TTS-friendly version. Short text passes through untouched."""
+    if len(text.split()) <= SUMMARY_WORD_THRESHOLD:
+        return text
+    try:
+        response = litellm.completion(
+            model=classifier_model(),
+            messages=[
+                {"role": "system", "content": SUMMARY_PROMPT},
+                {"role": "user", "content": text},
+            ],
+            max_tokens=400,
+            temperature=0.3,
+        )
+        rewritten = (response.choices[0].message.content or "").strip()
+        rewritten = rewritten.strip('"').strip("'").strip()
+        if not rewritten:
+            return text
+        log(
+            f"<summary> original_words={len(text.split())} "
+            f"rewritten_words={len(rewritten.split())}"
+        )
+        return rewritten
+    except Exception as exc:
+        log(f"<summary error> {exc!r}")
+        return text
 
 
 def generate_stop_preamble(text: str) -> str | None:
@@ -292,12 +345,14 @@ def handle_stop(payload: dict, api_key: str) -> None:
     if not text:
         return
 
-    # Classifier and preamble are independent HTTP calls — run concurrently.
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    # Classifier, preamble, and summariser are independent HTTP calls — run concurrently.
+    with ThreadPoolExecutor(max_workers=3) as executor:
         style_future = executor.submit(classify_style, text)
         preamble_future = executor.submit(generate_stop_preamble, text)
+        summary_future = executor.submit(summarise_for_tts, text)
         style = style_future.result()
         preamble = preamble_future.result()
+        spoken_text = summary_future.result()
 
     voice = f"{voice_base()}_{style.value}"
     log(f"<stop> style={style.value} voice={voice} preamble={preamble!r}")
@@ -306,7 +361,7 @@ def handle_stop(payload: dict, api_key: str) -> None:
     if preamble:
         # Preamble gets its own sentence closure so the TTS falls properly.
         clips.append((f"{preamble}.", voice_monologue()))
-    clips.append((text, voice))
+    clips.append((spoken_text, voice))
     play_clips(clips, api_key, gap_seconds=0.35)
 
 
