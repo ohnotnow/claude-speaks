@@ -93,6 +93,15 @@ other flavours when Claude's reply genuinely calls for it.
 Every Stop event and classifier pick gets appended to `stop-hook.log`.
 Handy when tuning the classifier prompt or chasing down voice 404s.
 
+The last ten turns are also kept in `/tmp/` as a pair of files:
+
+- `claude-speaks-<timestamp>.mp3` — preamble + main reply stitched
+  into a single mp3.
+- `claude-speaks-<timestamp>.txt` — each clip's voice id and the exact
+  text that was spoken, separated by blank lines.
+
+Older pairs are pruned on each new run.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).

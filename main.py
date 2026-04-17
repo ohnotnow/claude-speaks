@@ -41,6 +41,12 @@ DEFAULT_VOICE_BASE = "gb_jane"
 MAX_SPEAK_CHARS = 800
 SUMMARY_WORD_THRESHOLD = 25
 
+AUDIO_DIR = Path("/tmp")
+AUDIO_PREFIX = "claude-speaks-"
+AUDIO_KEEP = 10
+GAPS_DIR = PROJECT_DIR / "gaps"
+DEFAULT_GAP = "0_75s"
+
 
 class VoiceStyle(str, Enum):
     NEUTRAL = "neutral"
@@ -240,6 +246,8 @@ def generate_stop_preamble(text: str) -> str | None:
         )
         line = (response.choices[0].message.content or "").strip()
         line = line.strip('"').strip("'").rstrip(".,!?;:").strip()
+        if line:
+            line += " ..."
         return line or None
     except Exception as exc:
         log(f"<preamble gen error> {exc!r}")
@@ -299,11 +307,37 @@ def _safe_synthesise(text: str, voice: str, api_key: str) -> bytes | None:
         return None
 
 
-def play_clips(clips: list[tuple[str, str]], api_key: str, gap_seconds: float = 0.0) -> None:
-    """Synthesise each (text, voice) pair in parallel, then play sequentially.
+def gap_blob() -> bytes:
+    """Read the chosen silent-mp3 gap. GAP_FILE selects which file in gaps/."""
+    name = os.environ.get("GAP_FILE", DEFAULT_GAP)
+    path = GAPS_DIR / f"{name}.mp3"
+    try:
+        return path.read_bytes()
+    except OSError as exc:
+        log(f"<gap error> {exc!r} path={path}")
+        return b""
 
-    A small gap_seconds between clips gives Marvin his breath before gritting
-    his teeth and reading the actual reply.
+
+def rotate_audio_archive() -> None:
+    """Keep only the AUDIO_KEEP most recent mp3s (plus their .txt companions)."""
+    try:
+        mp3s = sorted(
+            AUDIO_DIR.glob(f"{AUDIO_PREFIX}*.mp3"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for old in mp3s[AUDIO_KEEP:]:
+            old.unlink(missing_ok=True)
+            old.with_suffix(".txt").unlink(missing_ok=True)
+    except Exception as exc:
+        log(f"<rotate error> {exc!r}")
+
+
+def play_clips(clips: list[tuple[str, str]], api_key: str) -> None:
+    """Synthesise each (text, voice) pair in parallel, stitch into one mp3, play it.
+
+    One combined mp3 + txt per turn lands in AUDIO_DIR. Marvin's trailing
+    ellipsis in the preamble gives the TTS a natural pause before the reply.
     """
     if not clips:
         return
@@ -312,26 +346,29 @@ def play_clips(clips: list[tuple[str, str]], api_key: str, gap_seconds: float = 
         futures = [executor.submit(_safe_synthesise, text, voice, api_key) for text, voice in clips]
         audio_blobs = [f.result() for f in futures]
 
-    filepaths: list[str] = []
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    for i, audio in enumerate(audio_blobs):
-        if not audio:
-            continue
-        path = Path(f"/tmp/claude-speaks-{stamp}-{i}.mp3")
-        path.write_bytes(audio)
-        filepaths.append(str(path))
-
-    if not filepaths:
+    successful = [
+        (audio, text, voice)
+        for audio, (text, voice) in zip(audio_blobs, clips)
+        if audio
+    ]
+    if not successful:
         return
 
-    parts: list[str] = []
-    for i, path in enumerate(filepaths):
-        if i > 0 and gap_seconds > 0:
-            parts.append(f"sleep {gap_seconds}")
-        parts.append(f"afplay {shlex.quote(path)}")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    combined_mp3 = AUDIO_DIR / f"{AUDIO_PREFIX}{stamp}.mp3"
+    gap = gap_blob() if len(successful) > 1 else b""
+    audio_parts = [audio for audio, _, _ in successful]
+    stitched = audio_parts[0] + b"".join(gap + part for part in audio_parts[1:])
+    combined_mp3.write_bytes(stitched)
+    combined_mp3.with_suffix(".txt").write_text(
+        "\n\n".join(f"voice: {voice}\n{text}" for _, text, voice in successful) + "\n",
+        encoding="utf-8",
+    )
+
+    rotate_audio_archive()
 
     subprocess.Popen(
-        ["sh", "-c", "; ".join(parts)],
+        ["sh", "-c", f"afplay {shlex.quote(str(combined_mp3))}"],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -359,10 +396,10 @@ def handle_stop(payload: dict, api_key: str) -> None:
 
     clips: list[tuple[str, str]] = []
     if preamble:
-        # Preamble gets its own sentence closure so the TTS falls properly.
-        clips.append((f"{preamble}.", voice_monologue()))
+        # Trailing ellipsis lets the TTS tail off with a natural pause before the reply.
+        clips.append((f"{preamble} ...", voice_monologue()))
     clips.append((spoken_text, voice))
-    play_clips(clips, api_key, gap_seconds=0.35)
+    play_clips(clips, api_key)
 
 
 def handle_notification(payload: dict, api_key: str) -> None:
