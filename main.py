@@ -52,6 +52,8 @@ AUDIO_KEEP = 10
 GAPS_DIR = PROJECT_DIR / "gaps"
 DEFAULT_GAP = "0_75s"
 
+FALLBACK_SOUND = Path("/System/Library/Sounds/Funk.aiff")
+
 
 class VoiceStyle(str, Enum):
     NEUTRAL = "neutral"
@@ -377,6 +379,23 @@ def gap_blob() -> bytes:
         return b""
 
 
+def play_fallback_sound() -> None:
+    """Last-resort audible heads-up when every TTS path has fallen over."""
+    if not FALLBACK_SOUND.is_file():
+        log(f"<fallback sound missing> {FALLBACK_SOUND}")
+        return
+    try:
+        subprocess.Popen(
+            ["afplay", str(FALLBACK_SOUND)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as exc:
+        log(f"<fallback sound error> {exc!r}")
+
+
 def rotate_audio_archive() -> None:
     """Keep only the AUDIO_KEEP most recent mp3s (plus their .txt companions)."""
     try:
@@ -415,6 +434,8 @@ def play_clips(clips: list[tuple[str, str]], api_key: str) -> None:
         if audio
     ]
     if not successful:
+        log("<fallback> all TTS synthesis failed; playing system sound")
+        play_fallback_sound()
         return
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -478,6 +499,8 @@ def handle_stop(payload: dict, api_key: str) -> None:
 def handle_notification(payload: dict, api_key: str) -> None:
     line = generate_notification_line()
     if not line:
+        log("<fallback> notification line generation failed; playing system sound")
+        play_fallback_sound()
         return
     log(f"<notification> {line}")
     append_notification_history(line)
