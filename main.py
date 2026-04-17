@@ -29,6 +29,10 @@ from pathlib import Path
 
 import litellm
 
+# Anthropic rejects system-only message lists; this makes LiteLLM quietly add a
+# placeholder user turn so the Marvin notification prompt works.
+litellm.modify_params = True
+
 PROJECT_DIR = Path(__file__).parent
 LOG_FILE = PROJECT_DIR / "stop-hook.log"
 ENV_FILE = PROJECT_DIR / ".env"
@@ -141,12 +145,15 @@ def strip_markdown(text: str) -> str:
     text = re.sub(r"^\s*[-*]\s+", "", text, flags=re.MULTILINE)
     text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
     text = text.replace("*", "")
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
-    if len(text) > MAX_SPEAK_CHARS:
-        trimmed = text[:MAX_SPEAK_CHARS].rsplit(" ", 1)[0]
-        text = f"{trimmed}…"
-    return text
+
+def cap_length(text: str) -> str:
+    """Last-resort safety net: if the summariser didn't trim enough, hard cap."""
+    if len(text) <= MAX_SPEAK_CHARS:
+        return text
+    trimmed = text[:MAX_SPEAK_CHARS].rsplit(" ", 1)[0]
+    return f"{trimmed}…"
 
 
 def load_env_file(path: Path) -> None:
@@ -169,7 +176,7 @@ def log(entry: object) -> None:
 
 
 def classifier_model() -> str:
-    return os.environ.get("CLASSIFIER_MODEL", "mistral/mistral-small-latest")
+    return os.environ.get("LLM_MODEL", "mistral/mistral-small-latest")
 
 
 def voice_base() -> str:
@@ -182,7 +189,20 @@ def voice_monologue() -> str:
     return os.environ.get("VOICE_MONOLOGUE", f"{voice_base()}_sarcasm")
 
 
-def classify_style(text: str) -> VoiceStyle:
+def _extract_style(content: str) -> str:
+    content = (content or "").strip()
+    try:
+        return (json.loads(content).get("style") or "").strip().lower()
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    lowered = content.lower()
+    for style in VoiceStyle:
+        if style.value in lowered:
+            return style.value
+    return "neutral"
+
+
+def classify_style(text: str) -> tuple[VoiceStyle, str | None]:
     try:
         response = litellm.completion(
             model=classifier_model(),
@@ -190,16 +210,14 @@ def classify_style(text: str) -> VoiceStyle:
                 {"role": "system", "content": CLASSIFIER_PROMPT},
                 {"role": "user", "content": text},
             ],
-            response_format={"type": "json_object"},
             max_tokens=50,
             temperature=0,
         )
-        content = response.choices[0].message.content or "{}"
-        style_str = (json.loads(content).get("style") or "neutral").strip().lower()
-        return VoiceStyle(style_str)
+        style_str = _extract_style(response.choices[0].message.content or "")
+        return VoiceStyle(style_str), None
     except Exception as exc:
         log(f"<classifier error> {exc!r}")
-        return VoiceStyle.NEUTRAL
+        return VoiceStyle.NEUTRAL, "classifier"
 
 
 def load_notification_history() -> list[str]:
@@ -219,10 +237,10 @@ def append_notification_history(line: str) -> None:
     NOTIFICATION_HISTORY_FILE.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
 
 
-def summarise_for_tts(text: str) -> str:
+def summarise_for_tts(text: str) -> tuple[str, str | None]:
     """Rewrite long replies into a TTS-friendly version. Short text passes through untouched."""
     if len(text.split()) <= SUMMARY_WORD_THRESHOLD:
-        return text
+        return text, None
     try:
         response = litellm.completion(
             model=classifier_model(),
@@ -236,18 +254,18 @@ def summarise_for_tts(text: str) -> str:
         rewritten = (response.choices[0].message.content or "").strip()
         rewritten = rewritten.strip('"').strip("'").strip()
         if not rewritten:
-            return text
+            return text, None
         log(
             f"<summary> original_words={len(text.split())} "
             f"rewritten_words={len(rewritten.split())}"
         )
-        return rewritten
+        return rewritten, None
     except Exception as exc:
         log(f"<summary error> {exc!r}")
-        return text
+        return text, "summariser"
 
 
-def generate_stop_preamble(text: str) -> str | None:
+def generate_stop_preamble(text: str) -> tuple[str | None, str | None]:
     try:
         response = litellm.completion(
             model=classifier_model(),
@@ -260,12 +278,13 @@ def generate_stop_preamble(text: str) -> str | None:
         )
         line = (response.choices[0].message.content or "").strip()
         line = line.strip('"').strip("'").rstrip(".,!?;:").strip()
-        if line:
-            line += " ..."
-        return line or None
+        if not line:
+            log("<preamble gen> model returned empty content")
+            return None, None
+        return f"{line} ...", None
     except Exception as exc:
         log(f"<preamble gen error> {exc!r}")
-        return None
+        return None, "preamble"
 
 
 def generate_notification_line() -> str | None:
@@ -428,12 +447,19 @@ def handle_stop(payload: dict, api_key: str) -> None:
         style_future = executor.submit(classify_style, text)
         preamble_future = executor.submit(generate_stop_preamble, text)
         summary_future = executor.submit(summarise_for_tts, text)
-        style = style_future.result()
-        preamble = preamble_future.result()
-        spoken_text = summary_future.result()
+        style, style_err = style_future.result()
+        preamble, preamble_err = preamble_future.result()
+        spoken_text, summary_err = summary_future.result()
 
     voice = f"{voice_base()}_{style.value}"
     log(f"<stop> style={style.value} voice={voice} preamble={preamble!r}")
+
+    failed = [name for name in (style_err, preamble_err, summary_err) if name]
+    if failed:
+        notice = f"Heads up — the {', '.join(failed)} call fell over. Raw reply coming up. "
+        spoken_text = notice + spoken_text
+
+    spoken_text = cap_length(spoken_text)
 
     clips: list[tuple[str, str]] = []
     if preamble:

@@ -68,7 +68,7 @@ Restart your Claude Code session and Claude should start speaking back.
 | Env var | Default | Notes |
 |---|---|---|
 | `MISTRAL_API_KEY` | — | Required. Used for both classifier and TTS. |
-| `CLASSIFIER_MODEL` | `mistral/mistral-small-latest` | Any LiteLLM-supported model. Try `mistral/ministral-3b-latest` for speed. |
+| `LLM_MODEL` | `mistral/mistral-small-latest` | Any LiteLLM-supported model used for the classifier, preamble, summariser, and notification lines. Try `mistral/ministral-3b-latest` for speed, or `anthropic/claude-haiku-4-5-20251001` for quality. |
 | `VOICE_BASE` | `gb_jane` | Prefix for the main reading voice. Swap to `gb_oliver`, `gb_paul`, `fr_marie`, etc. |
 | `VOICE_MONOLOGUE` | `<VOICE_BASE>_sarcasm` | Full voice id for Marvin's internal-monologue bits (the preamble on Stop, and idle-waiting Notifications). Try `fr_marie_sad` for proper Paranoid Android vibes. |
 | `GAP_FILE` | `0_75s` | Which silent mp3 in `gaps/` to stitch between the preamble and the main reply. See below. |
