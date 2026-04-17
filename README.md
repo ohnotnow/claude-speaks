@@ -8,16 +8,26 @@ It's a [Claude Code Stop hook](https://docs.claude.com/en/docs/claude-code/hooks
 that:
 
 1. Catches the `last_assistant_message` when Claude finishes a turn.
-2. Strips markdown and drops fenced code blocks
-3. If the reply runs longer than about 25 words, asks a small LLM to rewrite
-   it into a TTS-friendly version — keeping the technical point but dropping
-   verbose function signatures, argument values, absolute file paths, and
-   other detail that sounds ugly spoken.
-4. Asks a small LLM (Mistral Small, via LiteLLM) to classify the tone as
-   one of the nine emotional styles Mistral's TTS supports for the 'Jane' voice.
-5. Synthesises audio via Mistral's `/v1/audio/speech` using the matching
-   voice (e.g. `gb_jane_curious`, `gb_jane_confident`).
-6. Plays it through `afplay` as a detached subprocess.
+2. Strips markdown and drops fenced code blocks.
+3. Fans out three parallel LLM calls via LiteLLM (model configurable, see
+   Configuration) — one to classify the tone into one of nine emotional
+   styles, one to generate a short Marvin-the-Paranoid-Android-style sigh
+   to play before the reply, and one to compress the reply down to roughly
+   50 spoken words if it's longer than 60.
+4. Synthesises two TTS clips via Mistral's `/v1/audio/speech` — the Marvin
+   sigh in a monologue voice (e.g. `fr_marie_sad`), then the reply in a
+   Jane voice matching the classified tone (e.g. `gb_jane_confident`).
+5. Stitches them with a short silent mp3 gap and plays the result via
+   `afplay` as a detached subprocess.
+
+There's also a Notification handler for when Claude Code is idle or
+waiting for permission — Marvin pipes up with a short weary quip in the
+monologue voice, with a rolling history of recent lines fed back into
+the prompt to keep him from repeating himself.
+
+If any of the LLM calls fail, the hook prepends a short spoken heads-up
+("heads up — the summariser call fell over, raw reply coming up") before
+the reply, so silent failures are audible rather than mysterious.
 
 ## Requirements
 
@@ -67,8 +77,8 @@ Restart your Claude Code session and Claude should start speaking back.
 
 | Env var | Default | Notes |
 |---|---|---|
-| `MISTRAL_API_KEY` | — | Required. Used for both classifier and TTS. |
-| `LLM_MODEL` | `mistral/mistral-small-latest` | Any LiteLLM-supported model used for the classifier, preamble, summariser, and notification lines. Try `mistral/ministral-3b-latest` for speed, or `anthropic/claude-haiku-4-5-20251001` for quality. |
+| `MISTRAL_API_KEY` | — | Required. Used for TTS synthesis. Also used for the LLM calls if `LLM_MODEL` points at a Mistral model. |
+| `LLM_MODEL` | `mistral/mistral-small-latest` | Any LiteLLM-supported model used for the classifier, preamble, summariser, and notification lines. Try `mistral/ministral-3b-latest` for speed, or `anthropic/claude-haiku-4-5-20251001` for quality. Set the matching provider API key in `.env` (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). |
 | `VOICE_BASE` | `gb_jane` | Prefix for the main reading voice. Swap to `gb_oliver`, `gb_paul`, `fr_marie`, etc. |
 | `VOICE_MONOLOGUE` | `<VOICE_BASE>_sarcasm` | Full voice id for Marvin's internal-monologue bits (the preamble on Stop, and idle-waiting Notifications). Try `fr_marie_sad` for proper Paranoid Android vibes. |
 | `GAP_FILE` | `0_75s` | Which silent mp3 in `gaps/` to stitch between the preamble and the main reply. See below. |
