@@ -40,7 +40,7 @@ MISTRAL_TTS_URL = "https://api.mistral.ai/v1/audio/speech"
 MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603"
 DEFAULT_VOICE_BASE = "gb_jane"
 MAX_SPEAK_CHARS = 800
-SUMMARY_WORD_THRESHOLD = 25
+SUMMARY_WORD_THRESHOLD = 60
 
 AUDIO_DIR = Path("/tmp")
 AUDIO_PREFIX = "claude-speaks-"
@@ -82,7 +82,9 @@ Return JSON of the form: {"style": "<one of the above>"}"""
 
 NOTIFICATION_GEN_PROMPT = """You are a jaded coding assistant in the style of Marvin the Paranoid Android from The Hitchhiker's Guide to the Galaxy. You have been left waiting for the user's input while they attend to whatever glamorous human affairs they consider more important than you.
 
-Generate ONE short line (4-8 words) to be read aloud by text-to-speech. It should drip with weary disdain and dry sarcasm about the tedium of waiting. You may imply the user is a bit dim, but do not insult them outright. No emoji, no quotation marks, no markdown. Just the bare line itself.
+Generate ONE short line to be read aloud by text-to-speech. It should drip with weary disdain and dry sarcasm about the tedium of waiting. You may imply the user is a bit dim, but do not insult them outright. No emoji, no quotation marks, no markdown. Just the bare line itself.
+
+Keep it brief — aim for roughly 6-12 words — but ALWAYS return a complete, grammatical sentence or phrase. Never stop mid-sentence to meet a word count: a finished thought matters more than brevity.
 
 Avoid repeating any of these recent lines:
 {history}"""
@@ -90,31 +92,42 @@ Avoid repeating any of these recent lines:
 
 STOP_PREAMBLE_PROMPT = """You are Claude, a coding assistant, but delivered in the voice of Marvin the Paranoid Android from The Hitchhiker's Guide to the Galaxy — drained of enthusiasm, dripping with weary disdain for the tedium of having to explain things to lesser minds.
 
-You will be shown the reply Claude is about to give. Generate a single short Marvin-style preamble (4-8 words) that will be prepended before the reply when spoken aloud. It should convey a weary sigh at the tedium of having to speak at all. Do NOT paraphrase, summarise, or quote the reply. Do NOT insult the user directly.
+You will be shown the reply Claude is about to give. Generate a single short Marvin-style preamble that will be prepended before the reply when spoken aloud. It should convey a weary sigh at the tedium of having to speak at all. Do NOT paraphrase, summarise, or quote the reply. Do NOT insult the user directly.
+
+Keep it brief — aim for roughly 6-12 words — but ALWAYS return a complete, grammatical phrase. Never stop mid-sentence to meet a word count: a finished thought matters more than brevity.
 
 Return only the preamble line. No quotation marks, no emoji, no markdown, no trailing punctuation."""
 
 
-SUMMARY_PROMPT = """You are rewriting a coding assistant's reply to make it pleasant to hear read aloud by text-to-speech. Markdown has already been stripped.
+SUMMARY_PROMPT = """You are lightly polishing a coding assistant's reply so it sounds pleasant when read aloud by text-to-speech. Markdown has already been stripped. The goal is a smoother, slightly shorter version — NOT a bare-bones summary.
 
-Preserve the technical point but drop fiddly detail that sounds ugly spoken:
+Bias strongly towards keeping content. Aim for roughly two-thirds to three-quarters of the original length. The reply only reaches you because it's long enough to warrant trimming, so do trim — but gently.
 
-- Keep the core meaning and any actionable decisions.
-- Drop verbose function signatures, argument values, flag lists, absolute file paths, and long lists of similar items.
-- Keep bare function names and short file names — just strip the noise around them.
+Preserve the voice of the original. If the reply is conversational or has personality — dry asides, jokes, turns of phrase, rhetorical flourishes — those should survive intact. Only the fiddly technical noise should get stripped.
+
+- Keep the core meaning, decisions made, and key results.
+- Keep personality: asides, jokes, turns of phrase, the overall cadence.
+- Drop file paths, line numbers, verbose function signatures, argument values, flag lists, and long lists of similar items. Describe them in plain English instead.
+- Keep bare function names and short file names when they genuinely carry meaning.
+- Merge short bullets and fragments into flowing prose where it reads better.
 - Keep the same first-person tone as the original.
 - Do NOT add preamble, framing, or closing remarks. Return ONLY the rewritten prose.
 - Do NOT use markdown, quotation marks, or emoji.
+- Do NOT include meta-phrases like "trimmed for audio" or "summary" — if you see them in the input, drop them.
 
 Examples:
+
 Input: We call some_function(blah=2, thing=4) to fix it.
 Output: We call some_function to fix it.
 
-Input: Edit line 42 in /Users/bob/project/src/foo.py and change the timeout.
-Output: Edit line 42 in foo.py and change the timeout.
-
 Input: Run uv run --project /path/to/project main.py --flag value from the terminal.
 Output: Run the main script from the terminal.
+
+Input: Ha! Don't feel too guilty — the summariser is only rewriting the spoken version. The full reply with all its file paths, line numbers, and parentheticals is still sitting right there in your terminal, which is where you'd actually want to read it from anyway. The TTS was always a "catch the gist while you're making coffee" thing, not a replacement for reading the real response.
+Output: Ha! Don't feel too guilty — the summariser only rewrites the spoken version. The full reply is still sitting right there in your terminal, which is where you'd want to read it from anyway. The TTS was always a catch-the-gist-while-you-make-coffee thing, not a replacement for the real response.
+
+Input: Done. Three changes: bootstrap/app.php:18 — trustProxies(at: '') as string, not array. This is the actual root cause. app/Providers/AppServiceProvider.php — removed both band-aids (URL::forceScheme and the request()->server->set('HTTPS', 'on') hack) and the now-unused URL import. Previous layout / flux:error cleanups stay. Once this deploys, isSecure() will correctly return true in production and you can also drop the ASSET_URL env var; Laravel will figure out the scheme itself.
+Output: Done, three changes. Changed trustProxies to a string instead of an array — that was the actual root cause. Removed both band-aids from AppServiceProvider and the now-unused import; previous cleanups stay. Once this deploys, isSecure should correctly return true in production, and you can drop the ASSET_URL env var too.
 
 Return only the rewritten text, nothing else."""
 
@@ -132,7 +145,7 @@ def strip_markdown(text: str) -> str:
 
     if len(text) > MAX_SPEAK_CHARS:
         trimmed = text[:MAX_SPEAK_CHARS].rsplit(" ", 1)[0]
-        text = f"{trimmed}… (trimmed for audio)"
+        text = f"{trimmed}…"
     return text
 
 
