@@ -71,11 +71,33 @@ Restart your Claude Code session and Claude should start speaking back.
 | `CLASSIFIER_MODEL` | `mistral/mistral-small-latest` | Any LiteLLM-supported model. Try `mistral/ministral-3b-latest` for speed. |
 | `VOICE_BASE` | `gb_jane` | Prefix for the main reading voice. Swap to `gb_oliver`, `gb_paul`, `fr_marie`, etc. |
 | `VOICE_MONOLOGUE` | `<VOICE_BASE>_sarcasm` | Full voice id for Marvin's internal-monologue bits (the preamble on Stop, and idle-waiting Notifications). Try `fr_marie_sad` for proper Paranoid Android vibes. |
+| `GAP_FILE` | `0_75s` | Which silent mp3 in `gaps/` to stitch between the preamble and the main reply. See below. |
 
 Jane's nine emotional styles: `neutral`, `sarcasm`, `confused`, `shameful`,
 `sad`, `jealousy`, `frustrated`, `curious`, `confident`. The classifier is
 biased towards `neutral`, so you'll mostly hear that one and only get the
 other flavours when Claude's reply genuinely calls for it.
+
+### Gaps between clips
+
+When a Stop event triggers both a Marvin preamble and a main reply, the two
+synthesised mp3s are stitched into a single file and played back-to-back.
+To stop them running into each other, a short chunk of silence gets spliced
+in between.
+
+The `gaps/` directory holds a few pre-rendered silent mp3s:
+
+- `0_5s.mp3` — half a second, snappy
+- `0_75s.mp3` — three-quarters of a second (default)
+- `1_0s.mp3` — a full second, more theatrical
+
+Pick one with the `GAP_FILE` env var (no extension — e.g. `GAP_FILE=1_0s`).
+To add your own, drop another silent mp3 into `gaps/` and reference it by
+filename. Any mp3-encoding tool will do; `ffmpeg` is the usual suspect:
+
+```bash
+ffmpeg -f lavfi -i anullsrc=r=24000:cl=mono -t 1.5 -q:a 9 gaps/1_5s.mp3
+```
 
 ### Word replacements
 
@@ -122,6 +144,20 @@ The last ten turns are also kept in `/tmp/` as a pair of files:
   text that was spoken, separated by blank lines.
 
 Older pairs are pruned on each new run.
+
+## Example
+
+![Example audio](examples/claude-speaks-20260417-142352-252142.mp3)
+
+```
+voice: fr_marie_sad
+Oh wonderful, another avalanche of endless knobs to twiddle ... ...
+
+voice: gb_jane_neutral
+Perfect — that's exactly the tone we were aiming for. Voice intact, fiddly detail gone, still comfortably under the 30-second mark before Marvin can wander in with his polite cough.
+
+And I love that Marvin himself called it "another avalanche of endless knobs to twiddle" — self-aware to the end.
+```
 
 ## Licence
 
