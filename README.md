@@ -77,6 +77,27 @@ Jane's nine emotional styles: `neutral`, `sarcasm`, `confused`, `shameful`,
 biased towards `neutral`, so you'll mostly hear that one and only get the
 other flavours when Claude's reply genuinely calls for it.
 
+### Word replacements
+
+Mistral's TTS mispronounces plenty of technical jargon — `vite` comes out
+as "vite" (rhymes with "kite") rather than "veet", for example. Drop a
+`word_replacements.json` in the project directory with a flat map of
+problem words to phonetic spellings and they'll be swapped in before the
+text hits the TTS. Matching is case-insensitive and on word boundaries,
+so `Vite` and `vite` both get caught but `invitation` doesn't.
+
+```json
+{
+  "vite": "veet",
+  "nginx": "engine-ex",
+  "kubectl": "koob-control"
+}
+```
+
+A `word_replacements.example.json` ships with the repo — copy it to
+`word_replacements.json` and edit to taste. If the file's missing or
+malformed, the hook just skips the step.
+
 ## Known rough edges
 
 - Voices are configured via env vars (see Configuration), but the nine-style

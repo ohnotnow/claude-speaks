@@ -34,6 +34,7 @@ LOG_FILE = PROJECT_DIR / "stop-hook.log"
 ENV_FILE = PROJECT_DIR / ".env"
 NOTIFICATION_HISTORY_FILE = PROJECT_DIR / "notification-history.txt"
 NOTIFICATION_HISTORY_MAX = 10
+WORD_REPLACEMENTS_FILE = PROJECT_DIR / "word_replacements.json"
 
 MISTRAL_TTS_URL = "https://api.mistral.ai/v1/audio/speech"
 MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603"
@@ -307,6 +308,29 @@ def _safe_synthesise(text: str, voice: str, api_key: str) -> bytes | None:
         return None
 
 
+def load_word_replacements() -> dict[str, str]:
+    """Load phonetic word replacements from JSON. Missing or malformed file → no replacements."""
+    if not WORD_REPLACEMENTS_FILE.is_file():
+        return {}
+    try:
+        data = json.loads(WORD_REPLACEMENTS_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log(f"<word replacements error> {exc!r}")
+        return {}
+    if not isinstance(data, dict):
+        log(f"<word replacements> expected object, got {type(data).__name__}")
+        return {}
+    return {str(k): str(v) for k, v in data.items() if str(k).strip()}
+
+
+def apply_word_replacements(text: str, replacements: dict[str, str]) -> str:
+    """Swap technical/obscure words for phonetic versions so the TTS pronounces them right."""
+    for word, replacement in replacements.items():
+        pattern = r"\b" + re.escape(word) + r"\b"
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
 def gap_blob() -> bytes:
     """Read the chosen silent-mp3 gap. GAP_FILE selects which file in gaps/."""
     name = os.environ.get("GAP_FILE", DEFAULT_GAP)
@@ -341,6 +365,10 @@ def play_clips(clips: list[tuple[str, str]], api_key: str) -> None:
     """
     if not clips:
         return
+
+    replacements = load_word_replacements()
+    if replacements:
+        clips = [(apply_word_replacements(text, replacements), voice) for text, voice in clips]
 
     with ThreadPoolExecutor(max_workers=max(len(clips), 1)) as executor:
         futures = [executor.submit(_safe_synthesise, text, voice, api_key) for text, voice in clips]
