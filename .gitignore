@@ -5,3 +5,4 @@
 stop-hook.log
 notification-history.txt
 config.json
+*.mp3
