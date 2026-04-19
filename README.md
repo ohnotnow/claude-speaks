@@ -44,10 +44,17 @@ cd claude-speaks
 uv sync
 ```
 
-Create a `.env` file with your Mistral key:
+Create a `.env` file with your Mistral key (and any other provider keys you
+need for `llm_model`):
 
 ```
 MISTRAL_API_KEY=your-key-here
+```
+
+Copy the example config and tweak to taste:
+
+```bash
+cp config.example.json config.json
 ```
 
 Then wire it up as a Stop hook in your Claude Code settings
@@ -75,13 +82,27 @@ Restart your Claude Code session and Claude should start speaking back.
 
 ## Configuration
 
+API keys live in `.env`. Everything else lives in `config.json` (copy
+`config.example.json` to get started). If `config.json` is missing or a key
+is absent, the defaults below kick in.
+
+`.env`:
+
 | Env var | Default | Notes |
 |---|---|---|
-| `MISTRAL_API_KEY` | — | Required. Used for TTS synthesis. Also used for the LLM calls if `LLM_MODEL` points at a Mistral model. |
-| `LLM_MODEL` | `mistral/mistral-small-latest` | Any LiteLLM-supported model used for the classifier, preamble, summariser, and notification lines. Try `mistral/ministral-3b-latest` for speed, or `anthropic/claude-haiku-4-5-20251001` for quality. Set the matching provider API key in `.env` (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). |
-| `VOICE_BASE` | `gb_jane` | Prefix for the main reading voice. Swap to `gb_oliver`, `gb_paul`, `fr_marie`, etc. |
-| `VOICE_MONOLOGUE` | `<VOICE_BASE>_sarcasm` | Full voice id for Marvin's internal-monologue bits (the preamble on Stop, and idle-waiting Notifications). Try `fr_marie_sad` for proper Paranoid Android vibes. |
-| `GAP_FILE` | `0_75s` | Which silent mp3 in `gaps/` to stitch between the preamble and the main reply. See below. |
+| `MISTRAL_API_KEY` | — | Required. Used for TTS synthesis. Also used for the LLM calls if `llm_model` points at a Mistral model. |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. | — | Only needed if `llm_model` points at that provider. |
+
+`config.json`:
+
+| Key | Default | Notes |
+|---|---|---|
+| `llm_model` | `mistral/mistral-small-latest` | Any LiteLLM-supported model used for the classifier, preamble, summariser, and notification lines. Try `mistral/ministral-3b-latest` for speed, or `anthropic/claude-haiku-4-5-20251001` for quality. |
+| `tts_provider` | `mistral` | Currently only Mistral is wired up; the key's there so a future multi-provider switch has somewhere to land. |
+| `voice_base` | `gb_jane` | Prefix for the main reading voice. Swap to `gb_oliver`, `gb_paul`, `fr_marie`, etc. |
+| `voice_monologue` | `<voice_base>_sarcasm` | Full voice id for Marvin's internal-monologue bits (the preamble on Stop, and idle-waiting Notifications). Try `fr_marie_sad` for proper Paranoid Android vibes. |
+| `gap_file` | `0_75s` | Which silent mp3 in `gaps/` to stitch between the preamble and the main reply. See below. |
+| `word_replacements` | `{}` | Phonetic swap map — see [Word replacements](#word-replacements). |
 
 Jane's nine emotional styles: `neutral`, `sarcasm`, `confused`, `shameful`,
 `sad`, `jealousy`, `frustrated`, `curious`, `confident`. The classifier is
@@ -101,9 +122,10 @@ The `gaps/` directory holds a few pre-rendered silent mp3s:
 - `0_75s.mp3` — three-quarters of a second (default)
 - `1_0s.mp3` — a full second, more theatrical
 
-Pick one with the `GAP_FILE` env var (no extension — e.g. `GAP_FILE=1_0s`).
-To add your own, drop another silent mp3 into `gaps/` and reference it by
-filename. Any mp3-encoding tool will do; `ffmpeg` is the usual suspect:
+Pick one with the `gap_file` key in `config.json` (no extension — e.g.
+`"gap_file": "1_0s"`). To add your own, drop another silent mp3 into
+`gaps/` and reference it by filename. Any mp3-encoding tool will do;
+`ffmpeg` is the usual suspect:
 
 ```bash
 ffmpeg -f lavfi -i anullsrc=r=24000:cl=mono -t 1.5 -q:a 9 gaps/1_5s.mp3
@@ -112,23 +134,25 @@ ffmpeg -f lavfi -i anullsrc=r=24000:cl=mono -t 1.5 -q:a 9 gaps/1_5s.mp3
 ### Word replacements
 
 Mistral's TTS mispronounces plenty of technical jargon — `vite` comes out
-as "vite" (rhymes with "kite") rather than "veet", for example. Drop a
-`word_replacements.json` in the project directory with a flat map of
-problem words to phonetic spellings and they'll be swapped in before the
-text hits the TTS. Matching is case-insensitive and on word boundaries,
-so `Vite` and `vite` both get caught but `invitation` doesn't.
+as "vite" (rhymes with "kite") rather than "veet", for example. Add a
+`word_replacements` object to `config.json` with a flat map of problem
+words to phonetic spellings and they'll be swapped in before the text
+hits the TTS. Matching is case-insensitive and on word boundaries, so
+`Vite` and `vite` both get caught but `invitation` doesn't.
 
 ```json
 {
-  "vite": "veet",
-  "nginx": "engine-ex",
-  "kubectl": "koob-control"
+  "word_replacements": {
+    "vite": "veet",
+    "nginx": "engine-ex",
+    "kubectl": "koob-control"
+  }
 }
 ```
 
-A `word_replacements.example.json` ships with the repo — copy it to
-`word_replacements.json` and edit to taste. If the file's missing or
-malformed, the hook just skips the step.
+`config.example.json` ships with a starter set — copy it to `config.json`
+and edit to taste. If the section's missing or malformed, the hook just
+skips the step.
 
 ## Known rough edges
 

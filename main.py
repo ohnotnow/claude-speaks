@@ -36,12 +36,13 @@ litellm.modify_params = True
 PROJECT_DIR = Path(__file__).parent
 LOG_FILE = PROJECT_DIR / "stop-hook.log"
 ENV_FILE = PROJECT_DIR / ".env"
+CONFIG_FILE = PROJECT_DIR / "config.json"
 NOTIFICATION_HISTORY_FILE = PROJECT_DIR / "notification-history.txt"
 NOTIFICATION_HISTORY_MAX = 10
-WORD_REPLACEMENTS_FILE = PROJECT_DIR / "word_replacements.json"
 
 MISTRAL_TTS_URL = "https://api.mistral.ai/v1/audio/speech"
 MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603"
+DEFAULT_LLM_MODEL = "mistral/mistral-small-latest"
 DEFAULT_VOICE_BASE = "gb_jane"
 MAX_SPEAK_CHARS = 800
 SUMMARY_WORD_THRESHOLD = 60
@@ -49,6 +50,9 @@ SUMMARY_WORD_THRESHOLD = 60
 AUDIO_DIR = Path("/tmp")
 AUDIO_PREFIX = "claude-speaks-"
 AUDIO_KEEP = 10
+
+LOG_MAX_BYTES = 1_000_000
+LOG_KEEP_BYTES = 500_000
 GAPS_DIR = PROJECT_DIR / "gaps"
 DEFAULT_GAP = "0_75s"
 
@@ -180,18 +184,53 @@ def log(entry: object) -> None:
         f.write(f"\n{separator}\n{timestamp}\n{separator}\n{body}\n")
 
 
+def trim_log() -> None:
+    """If the log has grown past LOG_MAX_BYTES, keep only the most recent tail."""
+    try:
+        if not LOG_FILE.is_file() or LOG_FILE.stat().st_size <= LOG_MAX_BYTES:
+            return
+        with LOG_FILE.open("rb") as f:
+            f.seek(-LOG_KEEP_BYTES, os.SEEK_END)
+            tail = f.read()
+        # Drop the partial first line so the kept tail starts cleanly.
+        _, newline, rest = tail.partition(b"\n")
+        kept = rest if newline else tail
+        LOG_FILE.write_bytes(b"<log truncated>\n" + kept)
+    except Exception as exc:
+        # Best-effort only — never let housekeeping break the hook.
+        try:
+            log(f"<trim log error> {exc!r}")
+        except Exception:
+            pass
+
+
+def load_config() -> dict:
+    """Read config.json. Missing or malformed → empty dict (defaults kick in)."""
+    if not CONFIG_FILE.is_file():
+        return {}
+    try:
+        data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log(f"<config error> {exc!r}")
+        return {}
+    if not isinstance(data, dict):
+        log(f"<config> expected object, got {type(data).__name__}")
+        return {}
+    return data
+
+
 def classifier_model() -> str:
-    return os.environ.get("LLM_MODEL", "mistral/mistral-small-latest")
+    return load_config().get("llm_model") or DEFAULT_LLM_MODEL
 
 
 def voice_base() -> str:
     """Prefix for the main reading voice — e.g. `gb_jane`, `gb_oliver`, `fr_marie`."""
-    return os.environ.get("VOICE_BASE", DEFAULT_VOICE_BASE)
+    return load_config().get("voice_base") or DEFAULT_VOICE_BASE
 
 
 def voice_monologue() -> str:
     """Full voice id for Marvin's internal-monologue bits (preamble + notifications)."""
-    return os.environ.get("VOICE_MONOLOGUE", f"{voice_base()}_sarcasm")
+    return load_config().get("voice_monologue") or f"{voice_base()}_sarcasm"
 
 
 def _extract_style(content: str) -> str:
@@ -346,14 +385,8 @@ def _safe_synthesise(text: str, voice: str, api_key: str) -> bytes | None:
 
 
 def load_word_replacements() -> dict[str, str]:
-    """Load phonetic word replacements from JSON. Missing or malformed file → no replacements."""
-    if not WORD_REPLACEMENTS_FILE.is_file():
-        return {}
-    try:
-        data = json.loads(WORD_REPLACEMENTS_FILE.read_text(encoding="utf-8"))
-    except Exception as exc:
-        log(f"<word replacements error> {exc!r}")
-        return {}
+    """Phonetic replacements pulled from config.json. Missing section → no replacements."""
+    data = load_config().get("word_replacements") or {}
     if not isinstance(data, dict):
         log(f"<word replacements> expected object, got {type(data).__name__}")
         return {}
@@ -369,8 +402,8 @@ def apply_word_replacements(text: str, replacements: dict[str, str]) -> str:
 
 
 def gap_blob() -> bytes:
-    """Read the chosen silent-mp3 gap. GAP_FILE selects which file in gaps/."""
-    name = os.environ.get("GAP_FILE", DEFAULT_GAP)
+    """Read the chosen silent-mp3 gap. `gap_file` in config picks which one."""
+    name = load_config().get("gap_file") or DEFAULT_GAP
     path = GAPS_DIR / f"{name}.mp3"
     try:
         return path.read_bytes()
@@ -509,6 +542,7 @@ def handle_notification(payload: dict, api_key: str) -> None:
 
 def main() -> None:
     load_env_file(ENV_FILE)
+    trim_log()
     raw = sys.stdin.read()
 
     try:

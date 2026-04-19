@@ -1,0 +1,16 @@
+{
+  "llm_model": "mistral/mistral-small-latest",
+  "tts_provider": "mistral",
+  "voice_base": "gb_jane",
+  "voice_monologue": "gb_jane_sarcasm",
+  "gap_file": "0_75s",
+  "word_replacements": {
+    "vite": "veet",
+    "nginx": "engine-ex",
+    "kubectl": "cube-control",
+    "kubernetes": "koo-ber-net-eez",
+    "postgres": "post-gress",
+    ".env": "dot-env",
+    "sqlite": "sequel-lite"
+  }
+}
