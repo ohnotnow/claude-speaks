@@ -1,10 +1,16 @@
 {
   "llm_model": "mistral/mistral-small-latest",
   "tts_provider": "mistral",
-  "voice_base": "gb_jane",
-  "voice_monologue": "gb_jane_sarcasm",
-  "tts_language": "en",
-  "tts_language_monologue": "en",
+  "voices": {
+    "mistral": {
+      "main": {"voice": "gb_jane"},
+      "monologue": {"voice": "fr_marie_sad"}
+    },
+    "xai": {
+      "main": {"voice": "Eve", "language": "en"},
+      "monologue": {"voice": "Ara", "language": "fr"}
+    }
+  },
   "gap_file": "0_75s",
   "word_replacements": {
     "vite": "veet",

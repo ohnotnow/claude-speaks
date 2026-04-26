@@ -9,14 +9,16 @@ that:
 
 1. Catches the `last_assistant_message` when Claude finishes a turn.
 2. Strips markdown and drops fenced code blocks.
-3. Fans out three parallel LLM calls via LiteLLM (model configurable, see
-   Configuration) — one to classify the tone into one of nine emotional
-   styles, one to generate a short Marvin-the-Paranoid-Android-style sigh
-   to play before the reply, and one to compress the reply down to roughly
-   50 spoken words if it's longer than 60.
-4. Synthesises two TTS clips via Mistral's `/v1/audio/speech` — the Marvin
-   sigh in a monologue voice (e.g. `fr_marie_sad`), then the reply in a
-   Jane voice matching the classified tone (e.g. `gb_jane_confident`).
+3. Fans out parallel LLM calls via LiteLLM (model configurable, see
+   Configuration) — a Marvin-the-Paranoid-Android-style sigh to play
+   before the reply, and a summariser pass that compresses long replies
+   to roughly 50 spoken words. On Mistral, a third call classifies the
+   tone into one of nine emotional styles to pick the right Jane voice;
+   on xAI, the classifier is skipped and the summariser embeds inline
+   prosody tags (`<soft>`, `<emphasis>`, `<slow>`, …) directly in the
+   text.
+4. Synthesises two TTS clips via the configured provider — Marvin's sigh
+   in a monologue voice, then the reply in the main voice.
 5. Stitches them with a short silent mp3 gap and plays the result via
    `afplay` as a detached subprocess.
 
@@ -44,11 +46,13 @@ cd claude-speaks
 uv sync
 ```
 
-Create a `.env` file with your Mistral key (and any other provider keys you
-need for `llm_model`):
+Create a `.env` file with the API key for whichever TTS provider you're
+using (and any other provider keys you need for `llm_model`):
 
 ```
 MISTRAL_API_KEY=your-key-here
+# or, if you've set tts_provider to "xai":
+# XAI_API_KEY=xai-...
 ```
 
 Copy the example config and tweak to taste:
@@ -100,12 +104,49 @@ is absent, the defaults below kick in.
 |---|---|---|
 | `llm_model` | `mistral/mistral-small-latest` | Any LiteLLM-supported model used for the classifier, preamble, summariser, and notification lines. Try `mistral/ministral-3b-latest` for speed, or `anthropic/claude-haiku-4-5-20251001` for quality. |
 | `tts_provider` | `mistral` | Either `mistral` or `xai`. See [Switching to xAI](#switching-to-xai) for what changes when you flip this. |
-| `voice_base` | `gb_jane` | On Mistral: prefix for the main reading voice (the nine-style suffix is appended automatically). Try `gb_oliver`, `gb_paul`, `fr_marie`. On xAI: a literal voice id like `Eve` — no suffix is appended because xAI uses inline tags for prosody. |
-| `voice_monologue` | `<voice_base>_sarcasm` | Full voice id for Marvin's internal-monologue bits (the preamble on Stop, and idle-waiting Notifications). On Mistral, try `fr_marie_sad` for proper Paranoid Android vibes. On xAI, use any voice id — the trick is the language knob below. |
-| `tts_language` | `en` | xAI only. ISO language code for Jane's reply. |
-| `tts_language_monologue` | `en` | xAI only. Language code for Marvin's lines. **Set this to `fr`** — none of xAI's voices come close to `fr_marie_sad`'s dejection on their own, but speaking English text with a French language hint adds the necessary world-weary drip. The French win, as ever. |
+| `voices` | (defaults below) | Per-provider voice config keyed by provider name and role. See [Voices](#voices). |
 | `gap_file` | `0_75s` | Which silent mp3 in `gaps/` to stitch between the preamble and the main reply. See below. |
 | `word_replacements` | `{}` | Phonetic swap map — see [Word replacements](#word-replacements). |
+
+### Voices
+
+`voices` is keyed first by provider, then by role. Two roles: `main` (Jane,
+who speaks the actual reply) and `monologue` (Marvin, who sighs before the
+reply on Stop and speaks the lone idle quip on Notification). Each role
+takes a `voice` and an optional `language` (xAI only — Mistral ignores it).
+
+```json
+"voices": {
+  "mistral": {
+    "main":      {"voice": "gb_jane"},
+    "monologue": {"voice": "fr_marie_sad"}
+  },
+  "xai": {
+    "main":      {"voice": "Eve", "language": "en"},
+    "monologue": {"voice": "Ara", "language": "fr"}
+  }
+}
+```
+
+Configure both providers and flipping `tts_provider` between `mistral` and
+`xai` will pick up the matching voice block automatically — no shuffling
+voice ids around when you switch.
+
+A bare string is accepted as shorthand for the default object form:
+`"main": "Eve"` is the same as `"main": {"voice": "Eve"}`.
+
+**Defaults** if a role is missing: Mistral falls back to `gb_jane` for main
+and `<main>_sarcasm` for monologue; xAI falls back to `Eve` for main and
+inherits main for monologue. Languages default to `en`.
+
+On Mistral, the `main` voice is treated as a **prefix** — the classifier's
+nine-style suffix (`_neutral`, `_sarcasm`, etc.) gets appended automatically.
+So `"voice": "gb_jane"` becomes `gb_jane_<style>` at synthesis time. The
+`monologue` voice is a full voice id — no suffix is appended.
+
+On xAI, both voices are literal ids and the prosody tags inside the text
+do the emotional work. Setting `monologue.language` to `fr` is the trick
+for getting xAI close to `fr_marie_sad`'s dejection — see below.
 
 Jane's nine emotional styles (Mistral only): `neutral`, `sarcasm`, `confused`,
 `shameful`, `sad`, `jealousy`, `frustrated`, `curious`, `confident`. The
@@ -119,17 +160,18 @@ set of inline prosody tags wrapped around spans of text — `<soft>`,
 `<emphasis>`, `<slow>`, `<lower-pitch>`, and so on. When `tts_provider` is
 `xai`:
 
-- The classifier call is skipped — `voice_base` is used as a literal voice
-  id (e.g. `Eve`), no nine-style suffix.
+- The classifier call is skipped — the configured `main` voice is used
+  literally, no nine-style suffix.
 - The summariser and preamble prompts are swapped for xAI variants that
   list the allowed tags and ask the LLM to wrap a span or two where it
   genuinely aids delivery.
 - The summariser runs even on short replies, so a "Done." can still pick
   up a `<slow>` if the model thinks it deserves one.
-- Marvin still gets his moment — the trick is `"tts_language_monologue":
-  "fr"`, which has xAI speak Marvin's English line with a French inflection
-  that's much closer to the right level of resentment than any of xAI's
-  default voices manage on their own.
+- Marvin gets his own voice id — pick something distinct from Jane's so
+  the preamble doesn't blur into the reply (`Ara` is a reasonable contrast
+  with `Eve`). Then set `monologue.language` to `fr` so xAI speaks the
+  English line with a French inflection — much closer to the right level
+  of resentment than any of xAI's default voices manage on their own.
 
 Example xAI config:
 
@@ -137,10 +179,12 @@ Example xAI config:
 {
   "llm_model": "mistral/mistral-small-latest",
   "tts_provider": "xai",
-  "voice_base": "Eve",
-  "voice_monologue": "Eve",
-  "tts_language": "en",
-  "tts_language_monologue": "fr"
+  "voices": {
+    "xai": {
+      "main":      {"voice": "Eve", "language": "en"},
+      "monologue": {"voice": "Ara", "language": "fr"}
+    }
+  }
 }
 ```
 
@@ -176,11 +220,11 @@ truncate playback at the boundary.
 
 ### Word replacements
 
-Mistral's TTS mispronounces plenty of technical jargon — `vite` comes out
+TTS engines mispronounce plenty of technical jargon — `vite` comes out
 as "vite" (rhymes with "kite") rather than "veet", for example. Add a
 `word_replacements` object to `config.json` with a flat map of problem
 words to phonetic spellings and they'll be swapped in before the text
-hits the TTS. Matching is case-insensitive and on word boundaries, so
+hits the TTS, regardless of provider. Matching is case-insensitive and on word boundaries, so
 `Vite` and `vite` both get caught but `invitation` doesn't.
 
 ```json
@@ -210,8 +254,10 @@ skips the step.
 
 ## Log
 
-Every Stop event and classifier pick gets appended to `stop-hook.log`.
-Handy when tuning the classifier prompt or chasing down voice 404s.
+Every Stop event gets appended to `stop-hook.log`, including the chosen
+voices, the rewritten text, and each TTS call's outcome (with byte counts
+on success or the API error body on failure). Handy when tuning prompts,
+chasing voice 404s, or working out why a clip didn't play.
 
 The last ten turns are also kept in `/tmp/` as a pair of files:
 

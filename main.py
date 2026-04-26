@@ -46,11 +46,14 @@ MISTRAL_TTS_URL = "https://api.mistral.ai/v1/audio/speech"
 MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603"
 XAI_TTS_URL = "https://api.x.ai/v1/tts"
 DEFAULT_LLM_MODEL = "mistral/mistral-small-latest"
-DEFAULT_VOICE_BASE = "gb_jane"
 DEFAULT_TTS_PROVIDER = "mistral"
 DEFAULT_TTS_LANGUAGE = "en"
 MAX_SPEAK_CHARS = 800
 SUMMARY_WORD_THRESHOLD = 60
+
+# Voice fallbacks when `voices.<provider>.<role>` is missing from config.
+# Mistral monologue inherits main and gets `_sarcasm` appended at lookup.
+DEFAULT_MAIN_VOICE = {"mistral": "gb_jane", "xai": "Eve"}
 
 AUDIO_DIR = Path("/tmp")
 AUDIO_PREFIX = "claude-speaks-"
@@ -287,29 +290,52 @@ def classifier_model() -> str:
     return load_config().get("llm_model") or DEFAULT_LLM_MODEL
 
 
-def voice_base() -> str:
-    """Prefix for the main reading voice — e.g. `gb_jane`, `gb_oliver`, `fr_marie`."""
-    return load_config().get("voice_base") or DEFAULT_VOICE_BASE
-
-
-def voice_monologue() -> str:
-    """Full voice id for Marvin's internal-monologue bits (preamble + notifications)."""
-    return load_config().get("voice_monologue") or f"{voice_base()}_sarcasm"
-
-
 def tts_provider() -> str:
     """Which TTS backend to use. `mistral` (default) or `xai`."""
     return (load_config().get("tts_provider") or DEFAULT_TTS_PROVIDER).lower()
 
 
-def tts_language() -> str:
-    """Language code for Jane's reply. Only consulted by the xAI backend."""
-    return load_config().get("tts_language") or DEFAULT_TTS_LANGUAGE
+def _voice_block(role: str) -> dict:
+    """Resolve `voices.<provider>.<role>` from config, accepting a string shorthand.
+
+    Shape:
+        "voices": {
+            "<provider>": {
+                "main":      {"voice": "...", "language": "..."},
+                "monologue": {"voice": "...", "language": "..."}
+            }
+        }
+
+    A bare string under a role (e.g. `"main": "Eve"`) is treated as `{"voice": "Eve"}`.
+    Anything else falls back to {} and the per-role defaults below kick in.
+    """
+    provider_block = (load_config().get("voices") or {}).get(tts_provider()) or {}
+    role_cfg = provider_block.get(role)
+    if isinstance(role_cfg, str):
+        return {"voice": role_cfg}
+    return role_cfg if isinstance(role_cfg, dict) else {}
 
 
-def tts_language_monologue() -> str:
-    """Language code for Marvin's lines. Set to `fr` for proper Paranoid Android drip."""
-    return load_config().get("tts_language_monologue") or tts_language()
+def voice_for(role: str) -> str:
+    """Voice id for a role (`main` or `monologue`) under the current provider."""
+    cfg = _voice_block(role)
+    if cfg.get("voice"):
+        return cfg["voice"]
+    if role == "monologue":
+        # Mistral inherits Jane and adds the sarcasm flavour; xAI just inherits.
+        main = voice_for("main")
+        return f"{main}_sarcasm" if tts_provider() == "mistral" else main
+    return DEFAULT_MAIN_VOICE.get(tts_provider(), DEFAULT_MAIN_VOICE["mistral"])
+
+
+def language_for(role: str) -> str:
+    """Language code for a role. xAI-only; Mistral ignores it."""
+    cfg = _voice_block(role)
+    if cfg.get("language"):
+        return cfg["language"]
+    if role == "monologue":
+        return language_for("main")
+    return DEFAULT_TTS_LANGUAGE
 
 
 def tts_api_key() -> str | None:
@@ -647,7 +673,7 @@ def handle_stop(payload: dict, api_key: str) -> None:
             preamble, preamble_err = preamble_future.result()
             spoken_text, summary_err = summary_future.result()
         style_err = None
-        voice = voice_base()
+        main_voice = voice_for("main")
     else:
         with ThreadPoolExecutor(max_workers=3) as executor:
             style_future = executor.submit(classify_style, text)
@@ -656,11 +682,12 @@ def handle_stop(payload: dict, api_key: str) -> None:
             style, style_err = style_future.result()
             preamble, preamble_err = preamble_future.result()
             spoken_text, summary_err = summary_future.result()
-        voice = f"{voice_base()}_{style.value}"
+        main_voice = f"{voice_for('main')}_{style.value}"
 
+    monologue_voice = voice_for("monologue")
     log(
-        f"<stop> provider={tts_provider()} voice={voice} "
-        f"monologue_voice={voice_monologue()} preamble={preamble!r}"
+        f"<stop> provider={tts_provider()} main_voice={main_voice} "
+        f"monologue_voice={monologue_voice} preamble={preamble!r}"
     )
 
     failed = [name for name in (style_err, preamble_err, summary_err) if name]
@@ -673,8 +700,8 @@ def handle_stop(payload: dict, api_key: str) -> None:
     clips: list[tuple[str, str, str]] = []
     if preamble:
         # Trailing ellipsis lets the TTS tail off with a natural pause before the reply.
-        clips.append((f"{preamble} ...", voice_monologue(), tts_language_monologue()))
-    clips.append((spoken_text, voice, tts_language()))
+        clips.append((f"{preamble} ...", monologue_voice, language_for("monologue")))
+    clips.append((spoken_text, main_voice, language_for("main")))
     play_clips(clips, api_key)
 
 
@@ -686,7 +713,7 @@ def handle_notification(payload: dict, api_key: str) -> None:
         return
     log(f"<notification> {line}")
     append_notification_history(line)
-    play_clips([(line, voice_monologue(), tts_language_monologue())], api_key)
+    play_clips([(line, voice_for("monologue"), language_for("monologue"))], api_key)
 
 
 def main() -> None:
