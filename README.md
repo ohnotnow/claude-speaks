@@ -34,7 +34,7 @@ the reply, so silent failures are audible rather than mysterious.
 - macOS (uses `afplay` for playback)
 - Python 3.14+
 - [uv](https://docs.astral.sh/uv/)
-- A Mistral API key
+- A Mistral API key (or an xAI API key — see [Switching to xAI](#switching-to-xai))
 
 ## Setup
 
@@ -90,7 +90,8 @@ is absent, the defaults below kick in.
 
 | Env var | Default | Notes |
 |---|---|---|
-| `MISTRAL_API_KEY` | — | Required. Used for TTS synthesis. Also used for the LLM calls if `llm_model` points at a Mistral model. |
+| `MISTRAL_API_KEY` | — | Required when `tts_provider` is `mistral`. Also used for the LLM calls if `llm_model` points at a Mistral model. |
+| `XAI_API_KEY` | — | Required when `tts_provider` is `xai`. |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. | — | Only needed if `llm_model` points at that provider. |
 
 `config.json`:
@@ -98,16 +99,53 @@ is absent, the defaults below kick in.
 | Key | Default | Notes |
 |---|---|---|
 | `llm_model` | `mistral/mistral-small-latest` | Any LiteLLM-supported model used for the classifier, preamble, summariser, and notification lines. Try `mistral/ministral-3b-latest` for speed, or `anthropic/claude-haiku-4-5-20251001` for quality. |
-| `tts_provider` | `mistral` | Currently only Mistral is wired up; the key's there so a future multi-provider switch has somewhere to land. |
-| `voice_base` | `gb_jane` | Prefix for the main reading voice. Swap to `gb_oliver`, `gb_paul`, `fr_marie`, etc. |
-| `voice_monologue` | `<voice_base>_sarcasm` | Full voice id for Marvin's internal-monologue bits (the preamble on Stop, and idle-waiting Notifications). Try `fr_marie_sad` for proper Paranoid Android vibes. |
+| `tts_provider` | `mistral` | Either `mistral` or `xai`. See [Switching to xAI](#switching-to-xai) for what changes when you flip this. |
+| `voice_base` | `gb_jane` | On Mistral: prefix for the main reading voice (the nine-style suffix is appended automatically). Try `gb_oliver`, `gb_paul`, `fr_marie`. On xAI: a literal voice id like `Eve` — no suffix is appended because xAI uses inline tags for prosody. |
+| `voice_monologue` | `<voice_base>_sarcasm` | Full voice id for Marvin's internal-monologue bits (the preamble on Stop, and idle-waiting Notifications). On Mistral, try `fr_marie_sad` for proper Paranoid Android vibes. On xAI, use any voice id — the trick is the language knob below. |
+| `tts_language` | `en` | xAI only. ISO language code for Jane's reply. |
+| `tts_language_monologue` | `en` | xAI only. Language code for Marvin's lines. **Set this to `fr`** — none of xAI's voices come close to `fr_marie_sad`'s dejection on their own, but speaking English text with a French language hint adds the necessary world-weary drip. The French win, as ever. |
 | `gap_file` | `0_75s` | Which silent mp3 in `gaps/` to stitch between the preamble and the main reply. See below. |
 | `word_replacements` | `{}` | Phonetic swap map — see [Word replacements](#word-replacements). |
 
-Jane's nine emotional styles: `neutral`, `sarcasm`, `confused`, `shameful`,
-`sad`, `jealousy`, `frustrated`, `curious`, `confident`. The classifier is
-biased towards `neutral`, so you'll mostly hear that one and only get the
-other flavours when Claude's reply genuinely calls for it.
+Jane's nine emotional styles (Mistral only): `neutral`, `sarcasm`, `confused`,
+`shameful`, `sad`, `jealousy`, `frustrated`, `curious`, `confident`. The
+classifier is biased towards `neutral`, so you'll mostly hear that one and
+only get the other flavours when Claude's reply genuinely calls for it.
+
+### Switching to xAI
+
+xAI's TTS doesn't have an emotional-style enum. Instead it accepts a small
+set of inline prosody tags wrapped around spans of text — `<soft>`,
+`<emphasis>`, `<slow>`, `<lower-pitch>`, and so on. When `tts_provider` is
+`xai`:
+
+- The classifier call is skipped — `voice_base` is used as a literal voice
+  id (e.g. `Eve`), no nine-style suffix.
+- The summariser and preamble prompts are swapped for xAI variants that
+  list the allowed tags and ask the LLM to wrap a span or two where it
+  genuinely aids delivery.
+- The summariser runs even on short replies, so a "Done." can still pick
+  up a `<slow>` if the model thinks it deserves one.
+- Marvin still gets his moment — the trick is `"tts_language_monologue":
+  "fr"`, which has xAI speak Marvin's English line with a French inflection
+  that's much closer to the right level of resentment than any of xAI's
+  default voices manage on their own.
+
+Example xAI config:
+
+```json
+{
+  "llm_model": "mistral/mistral-small-latest",
+  "tts_provider": "xai",
+  "voice_base": "Eve",
+  "voice_monologue": "Eve",
+  "tts_language": "en",
+  "tts_language_monologue": "fr"
+}
+```
+
+Unknown or malformed tags are ignored by xAI rather than rejected, so no
+sanitiser is needed — Claude's reply goes through as-is.
 
 ### Gaps between clips
 
@@ -128,8 +166,13 @@ Pick one with the `gap_file` key in `config.json` (no extension — e.g.
 `ffmpeg` is the usual suspect:
 
 ```bash
-ffmpeg -f lavfi -i anullsrc=r=24000:cl=mono -t 1.5 -q:a 9 gaps/1_5s.mp3
+ffmpeg -f lavfi -i anullsrc=r=22050:cl=mono -t 1.5 -b:a 56k gaps/1_5s.mp3
 ```
+
+The shipped gaps are 22050 Hz mono at 56 kbps. Any custom gap should match
+that — afplay refuses to cross sample-rate boundaries cleanly when
+stitching, so a 44.1 kHz gap between two 22 kHz clips will silently
+truncate playback at the boundary.
 
 ### Word replacements
 
@@ -156,8 +199,8 @@ skips the step.
 
 ## Known rough edges
 
-- Voices are configured via env vars (see Configuration), but the nine-style
-  enum still assumes Jane's flavour set — other voices may not have all nine.
+- On Mistral, the nine-style enum assumes Jane's flavour set — other Mistral
+  voices may not have all nine `_<style>` variants.
 - Markdown stripping is regex-based and unsubtle.
 - The hook blocks for roughly 2–3 seconds while the classifier and TTS
   calls complete. Playback itself is detached and non-blocking.

@@ -1,13 +1,15 @@
 """Claude Code hook: Jane speaks on Stop, Marvin grumbles on Notification.
 
 Stop events:
-    Read the final assistant message on stdin, strip markdown, classify
-    the tone via a small LLM, and synthesise audio with Mistral TTS using
-    the matching gb_jane_<style> voice.
+    Read the final assistant message on stdin, strip markdown, and synthesise
+    audio with the configured TTS provider. On Mistral, a small LLM classifies
+    the tone and the matching gb_jane_<style> voice is used. On xAI, the
+    classifier is skipped and the summariser embeds inline prosody tags
+    (<soft>, <emphasis>, <slow>, …) directly in the rewritten text.
 
 Notification events:
     Generate a short, Marvin-the-Paranoid-Android-style line via a small
-    LLM and speak it in gb_jane_sarcasm. A rolling history of the last
+    LLM and speak it in the monologue voice. A rolling history of the last
     few lines is fed back into the prompt to keep Marvin from looping.
 
 In both cases, afplay is detached so Claude Code's hook returns quickly.
@@ -42,8 +44,11 @@ NOTIFICATION_HISTORY_MAX = 10
 
 MISTRAL_TTS_URL = "https://api.mistral.ai/v1/audio/speech"
 MISTRAL_TTS_MODEL = "voxtral-mini-tts-2603"
+XAI_TTS_URL = "https://api.x.ai/v1/tts"
 DEFAULT_LLM_MODEL = "mistral/mistral-small-latest"
 DEFAULT_VOICE_BASE = "gb_jane"
+DEFAULT_TTS_PROVIDER = "mistral"
+DEFAULT_TTS_LANGUAGE = "en"
 MAX_SPEAK_CHARS = 800
 SUMMARY_WORD_THRESHOLD = 60
 
@@ -145,6 +150,65 @@ Output: Fingers crossed for Mimo. What I love is how much character this packs i
 Return only the rewritten text, nothing else."""
 
 
+XAI_TAG_BLOCK = """xAI prosody tags you MAY use (and ONLY these — do not invent others):
+
+- <soft>quieter, intimate</soft>
+- <whisper>conspiratorial</whisper>
+- <loud>raised voice</loud>
+- <emphasis>the important word</emphasis>
+- <slow>weighty, deliberate</slow>
+- <fast>urgent, rushed</fast>
+- <higher-pitch>questioning, surprised</higher-pitch>
+- <lower-pitch>grave, serious</lower-pitch>
+- <build-intensity>escalating</build-intensity>
+- <decrease-intensity>winding down</decrease-intensity>
+- <laugh-speak>amused while talking</laugh-speak>
+- <sing-song>playful</sing-song>
+
+Use them sparingly. Most text stays untagged — wrap one or two spans where they genuinely aid delivery, no more. Tags must be balanced (open and close)."""
+
+
+XAI_SUMMARY_PROMPT = f"""You are preparing a coding assistant's reply for text-to-speech playback. Markdown has already been stripped.
+
+Two jobs, in order:
+
+1. If the reply is longer than ~50 spoken words, compress aggressively. HARD WORD BUDGET: aim for 50, never exceed 80. Keep one good voice beat — the single most memorable line — and cut the rest. Drop file paths, line numbers, function signatures, flag lists, tangents, and any second or third example. Merge bullets into flowing prose. Keep first-person tone. If the reply is already short, leave the wording largely as-is.
+
+2. Wrap one or two spans in xAI prosody tags where they meaningfully aid delivery — an aside in <soft>, a key conclusion in <emphasis>, a weary moment in <slow>. Do not over-tag.
+
+{XAI_TAG_BLOCK}
+
+- Do NOT add preamble, framing, or closing remarks. Return ONLY the rewritten prose with tags inline.
+- Do NOT use markdown, quotation marks, or emoji.
+- Do NOT include meta-phrases like "summary" or "in short".
+
+Examples:
+
+Input: We call some_function(blah=2, thing=4) to fix it.
+Output: We call some_function to fix it.
+
+Input: Done. Three changes: bootstrap/app.php:18 — trustProxies(at: '') as string, not array. This is the actual root cause. Removed both band-aids and the now-unused URL import. Once this deploys, isSecure() will correctly return true in production.
+Output: Done, three changes. trustProxies now takes a string, not an array — <emphasis>that was the actual root cause</emphasis>. Removed both band-aids and the unused import. Once deployed, isSecure will return true in production.
+
+Input: Right — fingers crossed, Mimo's moment of truth. The thing I keep coming back to about this project is how much character it packs into roughly 480 lines of Python.
+Output: <slow>Fingers crossed for Mimo.</slow> What I love is how much character this packs into 480 lines.
+
+Return only the rewritten text, nothing else."""
+
+
+XAI_PREAMBLE_PROMPT = f"""You are Claude, a coding assistant, but delivered in the voice of Marvin the Paranoid Android from The Hitchhiker's Guide to the Galaxy — drained of enthusiasm, dripping with weary disdain for the tedium of having to explain things to lesser minds.
+
+You will be shown the reply Claude is about to give. Generate a single short Marvin-style preamble that will be prepended before the reply when spoken aloud. It should convey a weary sigh at the tedium of having to speak at all. Do NOT paraphrase, summarise, or quote the reply. Do NOT insult the user directly.
+
+You may wrap part of the line in <slow>...</slow> or <lower-pitch>...</lower-pitch> to lean into Marvin's drag, but only one tag — the line is already short. No other tags. Tags must be balanced.
+
+{XAI_TAG_BLOCK}
+
+Keep it brief — aim for roughly 6-12 words — but ALWAYS return a complete, grammatical phrase. Never stop mid-sentence to meet a word count: a finished thought matters more than brevity.
+
+Return only the preamble line. No quotation marks, no emoji, no markdown, no trailing punctuation."""
+
+
 def strip_markdown(text: str) -> str:
     """Flatten markdown so TTS doesn't read asterisks and backticks aloud."""
     text = re.sub(r"```[\s\S]*?```", "", text)
@@ -233,6 +297,28 @@ def voice_monologue() -> str:
     return load_config().get("voice_monologue") or f"{voice_base()}_sarcasm"
 
 
+def tts_provider() -> str:
+    """Which TTS backend to use. `mistral` (default) or `xai`."""
+    return (load_config().get("tts_provider") or DEFAULT_TTS_PROVIDER).lower()
+
+
+def tts_language() -> str:
+    """Language code for Jane's reply. Only consulted by the xAI backend."""
+    return load_config().get("tts_language") or DEFAULT_TTS_LANGUAGE
+
+
+def tts_language_monologue() -> str:
+    """Language code for Marvin's lines. Set to `fr` for proper Paranoid Android drip."""
+    return load_config().get("tts_language_monologue") or tts_language()
+
+
+def tts_api_key() -> str | None:
+    """Pick the right TTS provider key from the environment."""
+    if tts_provider() == "xai":
+        return os.environ.get("XAI_API_KEY")
+    return os.environ.get("MISTRAL_API_KEY")
+
+
 def _extract_style(content: str) -> str:
     content = (content or "").strip()
     try:
@@ -282,14 +368,21 @@ def append_notification_history(line: str) -> None:
 
 
 def summarise_for_tts(text: str) -> tuple[str, str | None]:
-    """Rewrite long replies into a TTS-friendly version. Short text passes through untouched."""
-    if len(text.split()) <= SUMMARY_WORD_THRESHOLD:
+    """Rewrite long replies into a TTS-friendly version.
+
+    On Mistral: short replies pass through untouched (the prompt is a pure
+    compressor). On xAI: every reply runs through so the model can also
+    annotate it with prosody tags.
+    """
+    on_xai = tts_provider() == "xai"
+    if not on_xai and len(text.split()) <= SUMMARY_WORD_THRESHOLD:
         return text, None
+    prompt = XAI_SUMMARY_PROMPT if on_xai else SUMMARY_PROMPT
     try:
         response = litellm.completion(
             model=classifier_model(),
             messages=[
-                {"role": "system", "content": SUMMARY_PROMPT},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": text},
             ],
             max_tokens=400,
@@ -301,7 +394,8 @@ def summarise_for_tts(text: str) -> tuple[str, str | None]:
             return text, None
         log(
             f"<summary> original_words={len(text.split())} "
-            f"rewritten_words={len(rewritten.split())}"
+            f"rewritten_words={len(rewritten.split())}\n"
+            f"rewritten_text:\n{rewritten}"
         )
         return rewritten, None
     except Exception as exc:
@@ -310,11 +404,12 @@ def summarise_for_tts(text: str) -> tuple[str, str | None]:
 
 
 def generate_stop_preamble(text: str) -> tuple[str | None, str | None]:
+    prompt = XAI_PREAMBLE_PROMPT if tts_provider() == "xai" else STOP_PREAMBLE_PROMPT
     try:
         response = litellm.completion(
             model=classifier_model(),
             messages=[
-                {"role": "system", "content": STOP_PREAMBLE_PROMPT},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": text},
             ],
             max_tokens=40,
@@ -349,7 +444,7 @@ def generate_notification_line() -> str | None:
         return None
 
 
-def synthesise(text: str, voice: str, api_key: str) -> bytes | None:
+def _synthesise_mistral(text: str, voice: str, api_key: str) -> bytes | None:
     payload = json.dumps({
         "input": text,
         "model": MISTRAL_TTS_MODEL,
@@ -373,14 +468,52 @@ def synthesise(text: str, voice: str, api_key: str) -> bytes | None:
     return base64.b64decode(audio_b64) if audio_b64 else None
 
 
-def _safe_synthesise(text: str, voice: str, api_key: str) -> bytes | None:
+def _synthesise_xai(text: str, voice: str, language: str, api_key: str) -> bytes | None:
+    # Match the shipped gap mp3s (22050 Hz / 56 kbps mono). afplay refuses to
+    # cross sample-rate boundaries cleanly when stitching, so an xAI clip at
+    # 44100 against a 22050 gap silently truncates the second clip.
+    payload = json.dumps({
+        "text": text,
+        "voice_id": voice,
+        "output_format": {"codec": "mp3", "sample_rate": 22050, "bit_rate": 64000},
+        "language": language,
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        XAI_TTS_URL,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return response.read() or None
+
+
+def synthesise(text: str, voice: str, language: str, api_key: str) -> bytes | None:
+    """Dispatch to the configured TTS provider. `language` is xAI-only."""
+    if tts_provider() == "xai":
+        return _synthesise_xai(text, voice, language, api_key)
+    return _synthesise_mistral(text, voice, api_key)
+
+
+def _safe_synthesise(text: str, voice: str, language: str, api_key: str) -> bytes | None:
+    provider = tts_provider()
     try:
-        return synthesise(text, voice, api_key)
+        result = synthesise(text, voice, language, api_key)
+        log(
+            f"<{provider} synth> voice={voice} lang={language} "
+            f"text_words={len(text.split())} text_chars={len(text)} "
+            f"audio_bytes={len(result) if result else 0}"
+        )
+        return result
     except urllib.error.HTTPError as exc:
-        log(f"<mistral http error> {exc.code} {exc.read().decode('utf-8', 'replace')}")
+        log(f"<{provider} http error> {exc.code} {exc.read().decode('utf-8', 'replace')}")
         return None
     except Exception as exc:
-        log(f"<mistral error> {exc!r}")
+        log(f"<{provider} error> {exc!r}")
         return None
 
 
@@ -444,32 +577,35 @@ def rotate_audio_archive() -> None:
         log(f"<rotate error> {exc!r}")
 
 
-def play_clips(clips: list[tuple[str, str]], api_key: str) -> None:
-    """Synthesise each (text, voice) pair in parallel, stitch into one mp3, play it.
+def play_clips(clips: list[tuple[str, str, str]], api_key: str) -> None:
+    """Synthesise each (text, voice, language) triple in parallel, stitch, play.
 
-    One combined mp3 + txt per turn lands in AUDIO_DIR. Marvin's trailing
-    ellipsis in the preamble gives the TTS a natural pause before the reply.
+    `language` is xAI-only; the Mistral backend ignores it. One combined mp3
+    + txt per turn lands in AUDIO_DIR. Marvin's trailing ellipsis in the
+    preamble gives the TTS a natural pause before the reply.
     """
     if not clips:
         return
 
     replacements = load_word_replacements()
     if replacements:
-        clips = [(apply_word_replacements(text, replacements), voice) for text, voice in clips]
+        clips = [(apply_word_replacements(text, replacements), voice, lang) for text, voice, lang in clips]
 
     with ThreadPoolExecutor(max_workers=max(len(clips), 1)) as executor:
-        futures = [executor.submit(_safe_synthesise, text, voice, api_key) for text, voice in clips]
+        futures = [executor.submit(_safe_synthesise, text, voice, lang, api_key) for text, voice, lang in clips]
         audio_blobs = [f.result() for f in futures]
 
     successful = [
         (audio, text, voice)
-        for audio, (text, voice) in zip(audio_blobs, clips)
+        for audio, (text, voice, _lang) in zip(audio_blobs, clips)
         if audio
     ]
     if not successful:
         log("<fallback> all TTS synthesis failed; playing system sound")
         play_fallback_sound()
         return
+    if len(successful) < len(clips):
+        log(f"<partial> {len(successful)}/{len(clips)} clips synthesised; playing what we have")
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     combined_mp3 = AUDIO_DIR / f"{AUDIO_PREFIX}{stamp}.mp3"
@@ -499,18 +635,31 @@ def handle_stop(payload: dict, api_key: str) -> None:
     if not text:
         return
 
-    # Classifier, preamble, and summariser are independent HTTP calls — run concurrently.
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        style_future = executor.submit(classify_style, text)
-        preamble_future = executor.submit(generate_stop_preamble, text)
-        summary_future = executor.submit(summarise_for_tts, text)
-        style, style_err = style_future.result()
-        preamble, preamble_err = preamble_future.result()
-        spoken_text, summary_err = summary_future.result()
+    on_xai = tts_provider() == "xai"
 
-    voice = f"{voice_base()}_{style.value}"
+    # On xAI the classifier has nowhere to land — voice ids are flat and the
+    # summariser embeds prosody tags directly in the text. Two parallel calls
+    # instead of three; net latency is the same or better.
+    if on_xai:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            preamble_future = executor.submit(generate_stop_preamble, text)
+            summary_future = executor.submit(summarise_for_tts, text)
+            preamble, preamble_err = preamble_future.result()
+            spoken_text, summary_err = summary_future.result()
+        style_err = None
+        voice = voice_base()
+    else:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            style_future = executor.submit(classify_style, text)
+            preamble_future = executor.submit(generate_stop_preamble, text)
+            summary_future = executor.submit(summarise_for_tts, text)
+            style, style_err = style_future.result()
+            preamble, preamble_err = preamble_future.result()
+            spoken_text, summary_err = summary_future.result()
+        voice = f"{voice_base()}_{style.value}"
+
     log(
-        f"<stop> style={style.value} voice={voice} "
+        f"<stop> provider={tts_provider()} voice={voice} "
         f"monologue_voice={voice_monologue()} preamble={preamble!r}"
     )
 
@@ -521,11 +670,11 @@ def handle_stop(payload: dict, api_key: str) -> None:
 
     spoken_text = cap_length(spoken_text)
 
-    clips: list[tuple[str, str]] = []
+    clips: list[tuple[str, str, str]] = []
     if preamble:
         # Trailing ellipsis lets the TTS tail off with a natural pause before the reply.
-        clips.append((f"{preamble} ...", voice_monologue()))
-    clips.append((spoken_text, voice))
+        clips.append((f"{preamble} ...", voice_monologue(), tts_language_monologue()))
+    clips.append((spoken_text, voice, tts_language()))
     play_clips(clips, api_key)
 
 
@@ -537,7 +686,7 @@ def handle_notification(payload: dict, api_key: str) -> None:
         return
     log(f"<notification> {line}")
     append_notification_history(line)
-    play_clips([(line, voice_monologue())], api_key)
+    play_clips([(line, voice_monologue(), tts_language_monologue())], api_key)
 
 
 def main() -> None:
@@ -553,9 +702,10 @@ def main() -> None:
 
     log(payload)
 
-    api_key = os.environ.get("MISTRAL_API_KEY")
+    api_key = tts_api_key()
     if not api_key:
-        log("<mistral> MISTRAL_API_KEY not set; skipping TTS")
+        env_var = "XAI_API_KEY" if tts_provider() == "xai" else "MISTRAL_API_KEY"
+        log(f"<{tts_provider()}> {env_var} not set; skipping TTS")
         return
 
     event = payload.get("hook_event_name")

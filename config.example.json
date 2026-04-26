@@ -3,6 +3,8 @@
   "tts_provider": "mistral",
   "voice_base": "gb_jane",
   "voice_monologue": "gb_jane_sarcasm",
+  "tts_language": "en",
+  "tts_language_monologue": "en",
   "gap_file": "0_75s",
   "word_replacements": {
     "vite": "veet",
