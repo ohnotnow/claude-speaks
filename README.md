@@ -24,8 +24,11 @@ that:
 
 There's also a Notification handler for when Claude Code is idle or
 waiting for permission — Marvin pipes up with a short weary quip in the
-monologue voice, with a rolling history of recent lines fed back into
-the prompt to keep him from repeating himself.
+notification voice (a separate role from monologue, so the idle nag can
+have its own voice and language). A rolling history of recent lines is
+fed back into the prompt to stop him repeating himself, and Python rolls
+a weighted die to pick English, German, or Japanese — favouring the
+latter two — so the line arrives in a different language each time.
 
 If any of the LLM calls fail, the hook prepends a short spoken heads-up
 ("heads up — the summariser call fell over, raw reply coming up") before
@@ -110,20 +113,24 @@ is absent, the defaults below kick in.
 
 ### Voices
 
-`voices` is keyed first by provider, then by role. Two roles: `main` (Jane,
-who speaks the actual reply) and `monologue` (Marvin, who sighs before the
-reply on Stop and speaks the lone idle quip on Notification). Each role
-takes a `voice` and an optional `language` (xAI only — Mistral ignores it).
+`voices` is keyed first by provider, then by role. Three roles: `main`
+(Jane, who speaks the actual reply), `monologue` (Marvin, who sighs
+before the reply on Stop), and `notification` (Marvin again, but for the
+idle "still waiting" quip — kept separate so the two flavours of Marvin
+don't have to share a voice or language). Each role takes a `voice` and
+an optional `language` (xAI only — Mistral ignores it).
 
 ```json
 "voices": {
   "mistral": {
-    "main":      {"voice": "gb_jane"},
-    "monologue": {"voice": "fr_marie_sad"}
+    "main":         {"voice": "gb_jane"},
+    "monologue":    {"voice": "fr_marie_sad"},
+    "notification": {"voice": "fr_marie_sad"}
   },
   "xai": {
-    "main":      {"voice": "Eve", "language": "en"},
-    "monologue": {"voice": "Ara", "language": "fr"}
+    "main":         {"voice": "Eve", "language": "en"},
+    "monologue":    {"voice": "Ara", "language": "fr"},
+    "notification": {"voice": "Ara", "language": "ja"}
   }
 }
 ```
@@ -137,7 +144,19 @@ A bare string is accepted as shorthand for the default object form:
 
 **Defaults** if a role is missing: Mistral falls back to `gb_jane` for main
 and `<main>_sarcasm` for monologue; xAI falls back to `Eve` for main and
-inherits main for monologue. Languages default to `en`.
+inherits main for monologue. `notification` falls back to whatever
+`monologue` resolves to, so old configs keep working unchanged. Languages
+default to `en`.
+
+**Notification languages.** The idle notification line is generated in
+English, German, or Japanese, picked by a weighted die in Python (1 / 5 / 5
+respectively, so English shows up roughly one time in eleven). The chosen
+language is logged as `<notification language>` so you can tell whether a
+surprising line was the LLM misbehaving or just the dice. The TTS
+`language` you set under `notification` is independent of the dice — the
+LLM picks the words, your config picks the accent, and pleasing mismatches
+(Japanese text through a German-flagged voice, say) are very much
+encouraged.
 
 On Mistral, the `main` voice is treated as a **prefix** — the classifier's
 nine-style suffix (`_neutral`, `_sarcasm`, etc.) gets appended automatically.
@@ -181,8 +200,9 @@ Example xAI config:
   "tts_provider": "xai",
   "voices": {
     "xai": {
-      "main":      {"voice": "Eve", "language": "en"},
-      "monologue": {"voice": "Ara", "language": "fr"}
+      "main":         {"voice": "Eve", "language": "en"},
+      "monologue":    {"voice": "Ara", "language": "fr"},
+      "notification": {"voice": "Ara", "language": "ja"}
     }
   }
 }
