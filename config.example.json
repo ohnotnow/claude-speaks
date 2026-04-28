@@ -4,11 +4,13 @@
   "voices": {
     "mistral": {
       "main": {"voice": "gb_jane"},
-      "monologue": {"voice": "fr_marie_sad"}
+      "monologue": {"voice": "fr_marie_sad"},
+      "notification": {"voice": "fr_marie_sad"}
     },
     "xai": {
       "main": {"voice": "Eve", "language": "en"},
-      "monologue": {"voice": "Ara", "language": "fr"}
+      "monologue": {"voice": "Ara", "language": "fr"},
+      "notification": {"voice": "Ara", "language": "ja"}
     }
   },
   "gap_file": "0_75s",

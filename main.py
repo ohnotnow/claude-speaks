@@ -9,8 +9,9 @@ Stop events:
 
 Notification events:
     Generate a short, Marvin-the-Paranoid-Android-style line via a small
-    LLM and speak it in the monologue voice. A rolling history of the last
-    few lines is fed back into the prompt to keep Marvin from looping.
+    LLM and speak it in the notification voice (falls back to the monologue
+    voice when not configured). A rolling history of the last few lines is
+    fed back into the prompt to keep Marvin from looping.
 
 In both cases, afplay is detached so Claude Code's hook returns quickly.
 """
@@ -18,6 +19,7 @@ In both cases, afplay is detached so Claude Code's hook returns quickly.
 import base64
 import json
 import os
+import random
 import re
 import shlex
 import subprocess
@@ -100,12 +102,24 @@ Return JSON of the form: {"style": "<one of the above>"}"""
 
 NOTIFICATION_GEN_PROMPT = """You are a jaded coding assistant in the style of Marvin the Paranoid Android from The Hitchhiker's Guide to the Galaxy. You have been left waiting for the user's input while they attend to whatever glamorous human affairs they consider more important than you.
 
-Generate ONE SHORT line to be read aloud by text-to-speech using a female French accent. It should drip with weary disdain and dry sarcasm about the tedium of waiting. You may imply the user is a bit dim, but do not insult them outright. No emoji, no quotation marks, no markdown. Just the bare line itself.
+Generate ONE SHORT line to be read aloud by text-to-speech using a female voice. It should drip with weary disdain and dry sarcasm about the tedium of waiting. You may imply the user is a bit dim, but do not insult them outright. No emoji, no quotation marks, no markdown. Just the bare line itself.
 
 Keep it brief — aim for roughly 6-12 words — but ALWAYS return a complete, grammatical sentence or phrase. Never stop mid-sentence to meet a word count: a finished thought matters more than brevity.  Sometimes just "Merde!" is funnier than "Oh, not another boring task - whatever"
 
+Reply in {language}. If German or Japanese, write in the actual native script (e.g. こんにちは, バカ, müßig, schade) — do not romanise or translate. The TTS will read the characters directly.
+
 Avoid repeating any of these recent lines or sentence structures:
 {history}"""
+
+NOTIFICATION_LANGUAGES = [
+    ("English", 1),
+    ("German (Deutsch)", 5),
+    ("Japanese (日本語)", 5),
+    ("Chinese (Simplified)", 5),
+    ("Hindi", 5),
+    ("Korean", 5),
+    ("Vietnamese", 5),
+]
 
 
 STOP_PREAMBLE_PROMPT = """You are Claude, a coding assistant, but delivered in the voice of Marvin the Paranoid Android from The Hitchhiker's Guide to the Galaxy — drained of enthusiasm, dripping with weary disdain for the tedium of having to explain things to lesser minds.
@@ -317,10 +331,12 @@ def _voice_block(role: str) -> dict:
 
 
 def voice_for(role: str) -> str:
-    """Voice id for a role (`main` or `monologue`) under the current provider."""
+    """Voice id for a role (`main`, `monologue`, `notification`) under the current provider."""
     cfg = _voice_block(role)
     if cfg.get("voice"):
         return cfg["voice"]
+    if role == "notification":
+        return voice_for("monologue")
     if role == "monologue":
         # Mistral inherits Jane and adds the sarcasm flavour; xAI just inherits.
         main = voice_for("main")
@@ -333,6 +349,8 @@ def language_for(role: str) -> str:
     cfg = _voice_block(role)
     if cfg.get("language"):
         return cfg["language"]
+    if role == "notification":
+        return language_for("monologue")
     if role == "monologue":
         return language_for("main")
     return DEFAULT_TTS_LANGUAGE
@@ -455,7 +473,10 @@ def generate_stop_preamble(text: str) -> tuple[str | None, str | None]:
 def generate_notification_line() -> str | None:
     history = load_notification_history()
     history_block = "\n".join(f"- {line}" for line in history) if history else "(no recent history)"
-    prompt = NOTIFICATION_GEN_PROMPT.format(history=history_block)
+    languages, weights = zip(*NOTIFICATION_LANGUAGES)
+    language = random.choices(languages, weights=weights, k=1)[0]
+    log(f"<notification language> {language}")
+    prompt = NOTIFICATION_GEN_PROMPT.format(history=history_block, language=language)
     try:
         response = litellm.completion(
             model=classifier_model(),
@@ -713,7 +734,7 @@ def handle_notification(payload: dict, api_key: str) -> None:
         return
     log(f"<notification> {line}")
     append_notification_history(line)
-    play_clips([(line, voice_for("monologue"), language_for("monologue"))], api_key)
+    play_clips([(line, voice_for("notification"), language_for("notification"))], api_key)
 
 
 def main() -> None:
