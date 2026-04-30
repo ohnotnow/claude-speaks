@@ -261,6 +261,49 @@ hits the TTS, regardless of provider. Matching is case-insensitive and on word b
 and edit to taste. If the section's missing or malformed, the hook just
 skips the step.
 
+## Shutting Marvin up mid-sentence
+
+If Claude finishes a turn while you're in a Teams call (or otherwise need
+silence in a hurry), `killall afplay` stops playback dead. Bind it to a
+hotkey and you've got a panic button.
+
+A ready-made script lives at `scripts/shut-marvin-up.sh`. Pick whichever of
+the three options below suits your setup.
+
+### Raycast
+
+The script ships with Raycast metadata in the header, so Raycast will treat
+it as a Script Command out of the box.
+
+1. Open Raycast → Settings → Extensions → Script Commands.
+2. Add the project's `scripts/` directory as a script directory.
+3. Find "Shut Marvin Up" in the list and assign a hotkey (something like
+   `⌃⌥⌘.` is unlikely to clash with Teams' own shortcuts).
+
+`@raycast.mode silent` means no Raycast window pops up — the hotkey just
+kills `afplay` and gets out of the way.
+
+### macOS Shortcuts.app
+
+No Raycast needed:
+
+1. Open Shortcuts.app → new shortcut.
+2. Add a "Run Shell Script" action with `killall afplay 2>/dev/null`.
+3. In the shortcut's info panel (the ⓘ on the right), set a keyboard
+   shortcut. It works system-wide, including during Teams calls.
+
+### Hammerspoon
+
+If you already have Hammerspoon, one line in `~/.hammerspoon/init.lua`:
+
+```lua
+hs.hotkey.bind({"ctrl", "alt", "cmd"}, ".", function()
+  hs.execute("killall afplay")
+end)
+```
+
+Reload the config and the chord is live.
+
 ## Known rough edges
 
 - On Mistral, the nine-style enum assumes Jane's flavour set — other Mistral
@@ -269,8 +312,9 @@ skips the step.
 - The hook blocks for roughly 2–3 seconds while the classifier and TTS
   calls complete. Playback itself is detached and non-blocking.
 - macOS-only, because of `afplay`.
-- No way to interrupt Jane mid-sentence. If she's reading a long response
-  and you want her to stop, `killall afplay` does the job.
+- No way to interrupt Jane mid-sentence from inside Claude Code itself —
+  see [Shutting Marvin up mid-sentence](#shutting-marvin-up-mid-sentence)
+  for the hotkey options.
 
 ## Log
 
