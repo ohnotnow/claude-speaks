@@ -13,7 +13,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 
-from history import append_notification_history, load_notification_history
+from history import load_notification_history
 from logging_util import log
 from text_util import SUMMARY_WORD_THRESHOLD, cap_length
 
@@ -236,7 +236,6 @@ class MistralProvider(Provider):
         if not line:
             return None
         log(f"<notification> {line}")
-        append_notification_history(line)
         return Clip(line, self.voice_for("notification"))
 
     def synthesise(self, clip: Clip) -> bytes | None:

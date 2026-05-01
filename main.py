@@ -1,11 +1,8 @@
 """Claude Code hook: speaks Claude's final reply on Stop, a Marvin quip on Notification.
 
-Reads stdin, picks the configured TTS provider from `providers/`, asks it for
-clips, hands them to `audio.play_clips` to stitch and play. afplay is detached
-so Claude Code's hook returns quickly.
-
-Provider behaviour lives in providers/<name>.py. See providers/base.py for the
-contract and providers/mistral.py / providers/xai.py for worked examples.
+Reads stdin, picks a TTS provider via auto-discovery, asks it for clips, hands
+them to audio.play_clips. afplay is detached so the hook returns quickly. See
+providers/README.md for the contract and how to add a new backend.
 """
 
 import json
@@ -16,48 +13,22 @@ import litellm
 
 from audio import play_clips, play_fallback_sound
 from config import ENV_FILE, classifier_model, load_config, load_env_file, tts_provider
+from history import append_notification_history
 from llm import LLM
 from logging_util import log, trim_log
 from providers import PROVIDERS
-from providers.base import Clip
+from text_util import strip_markdown
 
 # Anthropic rejects system-only message lists; this makes LiteLLM quietly add a
 # placeholder user turn so the Marvin notification prompt works.
 litellm.modify_params = True
 
 
-def _build_provider(name: str, api_key: str | None):
-    cls = PROVIDERS[name]
-    config = load_config()
-    return cls(
-        llm=LLM(model=classifier_model()),
-        api_key=api_key,
-        settings=(config.get("provider_settings") or {}).get(name) or {},
-        voices_config=(config.get("voices") or {}).get(name) or {},
-    )
-
-
-def _synth_fn(provider):
-    """Adapter: play_clips' (text, voice, language, api_key) → provider.synthesise(Clip)."""
-    def synth(text, voice, language, _api_key):
-        return provider.synthesise(Clip(text, voice, language))
-    return synth
-
-
 def handle_stop(payload: dict, provider) -> None:
-    from text_util import strip_markdown
-
-    raw_text = (payload.get("last_assistant_message") or "").strip()
-    text = strip_markdown(raw_text)
+    text = strip_markdown((payload.get("last_assistant_message") or "").strip())
     if not text:
         return
-
-    clips = provider.plan_stop_clips(text)
-    play_clips(
-        [(c.text, c.voice, c.language) for c in clips],
-        provider.api_key,
-        _synth_fn(provider),
-    )
+    play_clips(provider.plan_stop_clips(text), provider)
 
 
 def handle_notification(provider) -> None:
@@ -66,22 +37,18 @@ def handle_notification(provider) -> None:
         log("<fallback> notification line generation failed; playing system sound")
         play_fallback_sound()
         return
-    play_clips(
-        [(clip.text, clip.voice, clip.language)],
-        provider.api_key,
-        _synth_fn(provider),
-    )
+    append_notification_history(clip.text)
+    play_clips([clip], provider)
 
 
 def main() -> None:
     load_env_file(ENV_FILE)
     trim_log()
-    raw = sys.stdin.read()
 
     try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
-        log(f"<invalid JSON>\n{raw}")
+        payload = json.loads(sys.stdin.read() or "{}")
+    except json.JSONDecodeError as exc:
+        log(f"<bad payload> {exc!r}")
         return
 
     log(payload)
@@ -98,7 +65,13 @@ def main() -> None:
         log(f"<{name}> {cls.api_key_env} not set; skipping TTS")
         return
 
-    provider = _build_provider(name, api_key)
+    config = load_config()
+    provider = cls(
+        llm=LLM(model=classifier_model()),
+        api_key=api_key,
+        settings=(config.get("provider_settings") or {}).get(name) or {},
+        voices_config=(config.get("voices") or {}).get(name) or {},
+    )
 
     event = payload.get("hook_event_name")
     if event == "Stop":

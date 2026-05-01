@@ -9,26 +9,34 @@ that:
 
 1. Catches the `last_assistant_message` when Claude finishes a turn.
 2. Strips markdown and drops fenced code blocks.
-3. Fans out parallel LLM calls via LiteLLM (model configurable, see
-   Configuration) — a Marvin-the-Paranoid-Android-style sigh to play
-   before the reply, and a summariser pass that compresses long replies
-   to roughly 50 spoken words. On Mistral, a third call classifies the
-   tone into one of nine emotional styles to pick the right Jane voice;
-   on xAI, the classifier is skipped and the summariser embeds inline
-   prosody tags (`<soft>`, `<emphasis>`, `<slow>`, …) directly in the
-   text.
-4. Synthesises two TTS clips via the configured provider — Marvin's sigh
-   in a monologue voice, then the reply in the main voice.
+3. Hands the text to the configured TTS provider, which fans out
+   parallel LLM calls via LiteLLM (model configurable — see
+   Configuration) to produce a Marvin-the-Paranoid-Android-style sigh
+   and a TTS-friendly version of the reply. Each provider does this its
+   own way: Mistral classifies the tone into one of nine emotional
+   styles to pick a matching Jane voice; xAI skips the classifier and
+   asks the summariser to embed inline prosody tags (`<soft>`,
+   `<emphasis>`, `<slow>`, …) directly in the text.
+4. Synthesises two TTS clips — Marvin's sigh in a monologue voice, then
+   the reply in the main voice.
 5. Stitches them with a short silent mp3 gap and plays the result via
    `afplay` as a detached subprocess.
+
+The codebase splits along those lines: `main.py` is a thin entry point
+(~85 lines, reads stdin and dispatches), each TTS backend lives in its
+own file under `providers/`, and `audio.py` does the stitching and
+playback. Adding a new backend is a single new file in `providers/` —
+see [providers/README.md](providers/README.md) for the contract.
 
 There's also a Notification handler for when Claude Code is idle or
 waiting for permission — Marvin pipes up with a short weary quip in the
 notification voice (a separate role from monologue, so the idle nag can
 have its own voice and language). A rolling history of recent lines is
-fed back into the prompt to stop him repeating himself, and Python rolls
-a weighted die to pick English, German, or Japanese — favouring the
-latter two — so the line arrives in a different language each time.
+fed back into the prompt to stop him repeating himself, and Python
+rolls a weighted die to pick the language — currently English, German,
+Japanese, Chinese, Hindi, Korean, or Vietnamese — so the line arrives
+in something different each time. English is weighted at 1, the other
+six at 5 each, so English shows up roughly one time in 31.
 
 If any of the LLM calls fail, the hook prepends a short spoken heads-up
 ("heads up — the summariser call fell over, raw reply coming up") before
@@ -39,7 +47,9 @@ the reply, so silent failures are audible rather than mysterious.
 - macOS (uses `afplay` for playback)
 - Python 3.14+
 - [uv](https://docs.astral.sh/uv/)
-- A Mistral API key (or an xAI API key — see [Switching to xAI](#switching-to-xai))
+- An API key for whichever TTS provider you've configured (Mistral and xAI
+  ship in the box; others can be dropped into `providers/` — see
+  [providers/README.md](providers/README.md))
 
 ## Setup
 
@@ -93,6 +103,12 @@ API keys live in `.env`. Everything else lives in `config.json` (copy
 `config.example.json` to get started). If `config.json` is missing or a key
 is absent, the defaults below kick in.
 
+The LLM (used for the Marvin preamble, summariser, and any classifier the
+provider wants) and the TTS provider (used to actually speak) are
+independent. Set `llm_model` to anything LiteLLM supports — Claude,
+GPT, Mistral chat, a local Ollama model — and `tts_provider` to
+whichever speech backend you fancy. They don't have to share a vendor.
+
 `.env`:
 
 | Env var | Default | Notes |
@@ -105,9 +121,10 @@ is absent, the defaults below kick in.
 
 | Key | Default | Notes |
 |---|---|---|
-| `llm_model` | `mistral/mistral-small-latest` | Any LiteLLM-supported model used for the classifier, preamble, summariser, and notification lines. Try `mistral/ministral-3b-latest` for speed, or `anthropic/claude-haiku-4-5-20251001` for quality. |
-| `tts_provider` | `mistral` | Either `mistral` or `xai`. See [Switching to xAI](#switching-to-xai) for what changes when you flip this. |
-| `voices` | (defaults below) | Per-provider voice config keyed by provider name and role. See [Voices](#voices). |
+| `llm_model` | `mistral/mistral-small-latest` | Any LiteLLM-supported model, used for the LLM-shaped work each provider needs (classifier, preamble, summariser, notification line). Try `mistral/ministral-3b-latest` for speed, or `anthropic/claude-haiku-4-5-20251001` for quality. |
+| `tts_provider` | `mistral` | The `name` of any provider in `providers/`. Mistral and xAI ship in the box; see [Switching to xAI](#switching-to-xai) for what changes when you flip between them, and [providers/README.md](providers/README.md) for adding more. |
+| `voices` | (per-provider defaults) | Per-provider voice config keyed by provider name and role. See [Voices](#voices). |
+| `provider_settings` | `{}` | Per-provider knobs (model id, output format, sample rate, etc.). Each provider reads its own slice via `self.settings`. See [provider_settings](#provider_settings). |
 | `gap_file` | `0_75s` | Which silent mp3 in `gaps/` to stitch between the preamble and the main reply. See below. |
 | `word_replacements` | `{}` | Phonetic swap map — see [Word replacements](#word-replacements). |
 
@@ -142,21 +159,23 @@ voice ids around when you switch.
 A bare string is accepted as shorthand for the default object form:
 `"main": "Eve"` is the same as `"main": {"voice": "Eve"}`.
 
-**Defaults** if a role is missing: Mistral falls back to `gb_jane` for main
-and `<main>_sarcasm` for monologue; xAI falls back to `Eve` for main and
-inherits main for monologue. `notification` falls back to whatever
-`monologue` resolves to, so old configs keep working unchanged. Languages
-default to `en`.
+**Defaults** if a role is missing: each provider declares its own
+`default_voices` map (see the file for that provider in `providers/`).
+Mistral defaults to `gb_jane` for main and `gb_jane_sarcasm` for
+monologue and notification; xAI defaults to `Eve` for all three. If you
+omit a role from your `voices` block entirely, that provider's default
+fills in. Languages default to `en`.
 
 **Notification languages.** The idle notification line is generated in
-English, German, or Japanese, picked by a weighted die in Python (1 / 5 / 5
-respectively, so English shows up roughly one time in eleven). The chosen
-language is logged as `<notification language>` so you can tell whether a
-surprising line was the LLM misbehaving or just the dice. The TTS
-`language` you set under `notification` is independent of the dice — the
-LLM picks the words, your config picks the accent, and pleasing mismatches
-(Japanese text through a German-flagged voice, say) are very much
-encouraged.
+one of seven languages — English, German, Japanese, Chinese, Hindi,
+Korean, or Vietnamese — picked by a weighted die in Python (English at
+1, the others at 5 each, so English shows up roughly one time in 31).
+The chosen language is logged as `<notification language>` so you can
+tell whether a surprising line was the LLM misbehaving or just the
+dice. The TTS `language` you set under `notification` is independent of
+the dice — the LLM picks the words, your config picks the accent, and
+pleasing mismatches (Japanese text through a German-flagged voice, say)
+are very much encouraged.
 
 On Mistral, the `main` voice is treated as a **prefix** — the classifier's
 nine-style suffix (`_neutral`, `_sarcasm`, etc.) gets appended automatically.
@@ -211,6 +230,37 @@ Example xAI config:
 Unknown or malformed tags are ignored by xAI rather than rejected, so no
 sanitiser is needed — Claude's reply goes through as-is.
 
+### provider_settings
+
+Per-provider knobs — model ids, output formats, sample rates, anything
+the backend wants — live in `provider_settings.<provider_name>`. Each
+provider reads its own slice via `self.settings` and merges it over its
+own internal defaults, so omitting the block entirely is fine.
+
+xAI is the only built-in that exposes anything here:
+
+```json
+"provider_settings": {
+  "xai": {
+    "sample_rate": 22050,
+    "bit_rate": 64000
+  }
+}
+```
+
+These match the gap mp3s in `gaps/` and shouldn't be changed unless you
+also swap the gap files — see [Gaps between clips](#gaps-between-clips)
+for what happens if they don't agree.
+
+### Adding a TTS provider
+
+`providers/` is a drop-in folder. To add ElevenLabs, OpenAI, Replicate,
+Piper, or anything else, write one new file that implements the
+provider contract and the rest of the project picks it up automatically
+— no edits to `main.py`, no entry in a registry. See
+[providers/README.md](providers/README.md) for the contract, the worked
+examples, and a copy-pasteable skeleton.
+
 ### Gaps between clips
 
 When a Stop event triggers both a Marvin preamble and a main reply, the two
@@ -233,10 +283,14 @@ Pick one with the `gap_file` key in `config.json` (no extension — e.g.
 ffmpeg -f lavfi -i anullsrc=r=22050:cl=mono -t 1.5 -b:a 56k gaps/1_5s.mp3
 ```
 
-The shipped gaps are 22050 Hz mono at 56 kbps. Any custom gap should match
-that — afplay refuses to cross sample-rate boundaries cleanly when
-stitching, so a 44.1 kHz gap between two 22 kHz clips will silently
-truncate playback at the boundary.
+The shipped gaps are 22050 Hz mono. Any custom gap should match that, and
+any TTS provider you add should emit mp3 at the same rate — afplay
+refuses to cross sample-rate boundaries cleanly when stitching, so a
+44.1 kHz gap between two 22 kHz clips (or vice versa) will silently
+truncate playback at the boundary. The xAI provider pins its output
+explicitly via `provider_settings.xai`; if you swap in a provider that
+emits something else, expect to either match the rate or replace the
+gaps and update `provider_settings` to match.
 
 ### Word replacements
 

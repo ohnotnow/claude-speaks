@@ -1,0 +1,26 @@
+# Copy this file to a dotfile (the dot-prefixed version) next to main.py
+# and fill in whichever keys you actually need. The hook reads it via
+# config.load_env_file at startup; existing environment variables win, so
+# uncommenting a key here won't override anything you've already exported.
+#
+# The TTS provider and the LLM are independent — you only need keys for
+# the providers you're actually using.
+
+# ─── TTS provider keys ───────────────────────────────────────────────
+# Set the one matching tts_provider in config.json. Only one is needed.
+# To add a new provider, drop a file into providers/ (see providers/README.md)
+# and add its api_key_env name here.
+
+MISTRAL_API_KEY=
+XAI_API_KEY=
+
+# ─── LLM provider keys (used by litellm via llm_model in config.json) ───
+# Independent of the TTS provider above. Set the one matching the prefix
+# of llm_model — e.g. "mistral/mistral-small-latest" needs MISTRAL_API_KEY,
+# "anthropic/claude-haiku-4-5-20251001" needs ANTHROPIC_API_KEY,
+# "openai/gpt-5-mini" needs OPENAI_API_KEY.
+
+ANTHROPIC_API_KEY=
+OPENAI_API_KEY=
+# (MISTRAL_API_KEY above doubles as the LLM key when llm_model is a
+# Mistral model — no need to repeat it.)

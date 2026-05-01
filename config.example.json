@@ -13,6 +13,13 @@
       "notification": {"voice": "Ara", "language": "ja"}
     }
   },
+  "provider_settings": {
+    "_note": "Per-provider knobs. Each provider reads its own slice via self.settings; omit the block entirely to use built-in defaults. xAI's sample_rate / bit_rate must match the gap mp3s in gaps/ — mismatched rates silently truncate clip 2 onward.",
+    "xai": {
+      "sample_rate": 22050,
+      "bit_rate": 64000
+    }
+  },
   "gap_file": "0_75s",
   "word_replacements": {
     "vite": "veet",

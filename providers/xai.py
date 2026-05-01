@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from history import append_notification_history, load_notification_history
+from history import load_notification_history
 from logging_util import log
 from text_util import cap_length
 
@@ -191,7 +191,6 @@ class XAIProvider(Provider):
         if not line:
             return None
         log(f"<notification> {line}")
-        append_notification_history(line)
         return Clip(line, self.voice_for("notification"), self.language_for("notification"))
 
     def synthesise(self, clip: Clip) -> bytes | None:

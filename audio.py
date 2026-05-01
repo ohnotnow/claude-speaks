@@ -9,6 +9,7 @@ from pathlib import Path
 
 from config import load_config
 from logging_util import PROJECT_DIR, log
+from providers.base import Clip, Provider
 
 AUDIO_DIR = Path("/tmp")
 AUDIO_PREFIX = "claude-speaks-"
@@ -80,29 +81,30 @@ def rotate_audio_archive() -> None:
         log(f"<rotate error> {exc!r}")
 
 
-def play_clips(clips, api_key, synth_fn):
-    """Synthesise each (text, voice, language) triple in parallel, stitch, play.
+def _safe_synthesise(provider: Provider, clip: Clip) -> bytes | None:
+    """Call provider.synthesise but never propagate — providers should log their own errors."""
+    try:
+        return provider.synthesise(clip)
+    except Exception as exc:
+        log(f"<{provider.name} error> {exc!r}")
+        return None
 
-    `synth_fn(text, voice, language, api_key)` is the project's safe synthesiser
-    — passed in to avoid an audio↔main import cycle. Provider-shaped refactor
-    lands in epic cs-VqXmZ.4.
-    """
+
+def play_clips(clips: list[Clip], provider: Provider) -> None:
+    """Synthesise each clip in parallel, stitch with a silent gap, play via afplay."""
     if not clips:
         return
 
     replacements = load_word_replacements()
     if replacements:
-        clips = [(apply_word_replacements(text, replacements), voice, lang) for text, voice, lang in clips]
+        for clip in clips:
+            clip.text = apply_word_replacements(clip.text, replacements)
 
     with ThreadPoolExecutor(max_workers=max(len(clips), 1)) as executor:
-        futures = [executor.submit(synth_fn, text, voice, lang, api_key) for text, voice, lang in clips]
+        futures = [executor.submit(_safe_synthesise, provider, clip) for clip in clips]
         audio_blobs = [f.result() for f in futures]
 
-    successful = [
-        (audio, text, voice)
-        for audio, (text, voice, _lang) in zip(audio_blobs, clips)
-        if audio
-    ]
+    successful = [(audio, clip) for audio, clip in zip(audio_blobs, clips) if audio]
     if not successful:
         log("<fallback> all TTS synthesis failed; playing system sound")
         play_fallback_sound()
@@ -113,11 +115,11 @@ def play_clips(clips, api_key, synth_fn):
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     combined_mp3 = AUDIO_DIR / f"{AUDIO_PREFIX}{stamp}.mp3"
     gap = gap_blob() if len(successful) > 1 else b""
-    audio_parts = [audio for audio, _, _ in successful]
+    audio_parts = [audio for audio, _ in successful]
     stitched = audio_parts[0] + b"".join(gap + part for part in audio_parts[1:])
     combined_mp3.write_bytes(stitched)
     combined_mp3.with_suffix(".txt").write_text(
-        "\n\n".join(f"voice: {voice}\n{text}" for _, text, voice in successful) + "\n",
+        "\n\n".join(f"voice: {clip.voice}\n{clip.text}" for _, clip in successful) + "\n",
         encoding="utf-8",
     )
 
