@@ -6,6 +6,15 @@
     "main": true,
     "notification": true
   },
+  "notification_languages": [
+    ["English", 1],
+    ["German (Deutsch)", 5],
+    ["Japanese (日本語)", 5],
+    ["Chinese (Simplified)", 5],
+    ["Hindi", 5],
+    ["Korean", 5],
+    ["Vietnamese", 5]
+  ],
   "voices": {
     "mistral": {
       "main": {"voice": "gb_jane"},

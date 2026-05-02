@@ -6,6 +6,8 @@ providers/README.md for the full guide.
 
 from dataclasses import dataclass
 
+from prompts import load_prompt
+
 
 @dataclass
 class Clip:
@@ -39,6 +41,9 @@ class Provider:
         if role == "monologue" and "main" in self.default_voices:
             return self.default_voices["main"]
         return self.default_voices.get("main", "")
+
+    def prompt(self, name: str) -> str:
+        return load_prompt(self.name, name)
 
     def language_for(self, role: str) -> str:
         configured = self.voices_config.get(role)

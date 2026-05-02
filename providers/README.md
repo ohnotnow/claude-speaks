@@ -35,9 +35,12 @@ suffix trick in `providers/mistral.py`.
 `plan_stop_clips(text) -> list[Clip]` — Claude finished a turn. The
 markdown-stripped reply is in `text`. Return a list of `Clip`s to be spoken
 in order. Run whatever LLM calls you need (classifier, preamble generator,
-summariser) via `self.llm.complete(system_prompt, user_text)`. Run them in
-parallel with a `ThreadPoolExecutor` if there's more than one — Claude Code
-blocks on the hook returning, so latency matters.
+summariser) via `self.llm.complete(system_prompt, user_text)`. Get the
+system prompts via `self.prompt("classifier")`, `self.prompt("summary")`,
+`self.prompt("preamble")` — the strings live as markdown files under
+`prompts/<your_name>/` (see [Prompts](#prompts) below). Run the LLM calls
+in parallel with a `ThreadPoolExecutor` if there's more than one — Claude
+Code blocks on the hook returning, so latency matters.
 
 Respect `self.features` — a `{"monologue": bool, "main": bool, "notification": bool}`
 dict from `config.json`. If `monologue` is off, skip the preamble LLM call and
@@ -69,6 +72,54 @@ just doesn't play, no error.
 Either match the rate when you call your TTS API (`xai.py` does this
 explicitly via the `sample_rate` and `bit_rate` payload fields), or
 replace the gap mp3s and document the new rate.
+
+## Prompts
+
+Provider prompts (the system messages you send to the LLM) don't live in
+your Python file — they live as markdown files under
+`prompts/<your_name>/`. Each prompt your provider needs is one file:
+
+```
+prompts/<your_name>/
+  preamble.md           ← system prompt for your monologue/preamble call
+  summary.md            ← system prompt for your summariser call
+  notification.md       ← system prompt for the idle-quip call
+  ...                   ← whatever else your provider needs
+```
+
+Inside your provider, ask for one by name:
+
+```python
+text = self.llm.complete(self.prompt("summary"), user_text, max_tokens=400)
+```
+
+`self.prompt(name)` is provided by `Provider` and routes through
+`prompts.load_prompt`, which:
+
+1. Looks for `prompts.local/<your_name>/<name>.md` (gitignored user
+   override) and reads that if present.
+2. Falls back to `prompts/<your_name>/<name>.md` (your shipped default).
+3. Strips a leading `<!-- ... -->` HTML-comment block at load time.
+
+So you ship the defaults in `prompts/`, end-users override individual
+prompts via `prompts.local/`, and `git pull` never clobbers their copy.
+
+**You must ship a default** for every prompt your provider asks for. If
+both `prompts.local/` and `prompts/` are missing the file, `load_prompt`
+raises `FileNotFoundError` — the install is broken, not just unconfigured.
+
+**Document each prompt with a leading comment block.** Convention is to
+open every shipped prompt file with an HTML comment that says what the
+prompt is for, which method calls it, and what `{placeholders}` (if any)
+it accepts. The block is stripped at load time, so it never reaches the
+model — see the existing files in `prompts/mistral/` and `prompts/xai/`
+for the shape.
+
+**For prompts that use `str.format` placeholders**, run them through
+`prompts.safe_format(template, **kwargs)` rather than calling
+`.format(...)` directly. If a user's custom prompt has a stray `{`,
+`safe_format` logs the error and returns the unformatted template
+instead of crashing the hook.
 
 ## Provider-specific settings
 
@@ -119,9 +170,6 @@ The minimum file that auto-discovers, registers, and works:
 from providers.base import Clip, Provider
 
 
-SUMMARY_PROMPT = """Compress this assistant reply for TTS playback. ..."""
-
-
 class MyTTSProvider(Provider):
     name = "mytts"
     api_key_env = "MYTTS_API_KEY"
@@ -132,11 +180,11 @@ class MyTTSProvider(Provider):
     }
 
     def plan_stop_clips(self, text):
-        summary = self.llm.complete(SUMMARY_PROMPT, text)
+        summary = self.llm.complete(self.prompt("summary"), text)
         return [Clip(summary, self.voice_for("main"))]
 
     def plan_notification_clip(self):
-        line = self.llm.complete("You are Marvin. One short line.", "")
+        line = self.llm.complete(self.prompt("notification"), "")
         if not line:
             return None
         return Clip(line, self.voice_for("notification"))
@@ -149,5 +197,16 @@ class MyTTSProvider(Provider):
 PROVIDER = MyTTSProvider
 ```
 
-Drop that into `providers/mytts.py`, set `MYTTS_API_KEY` in your env, set
-`tts_provider: "mytts"` in `config.json`, and you're live.
+Then ship the matching default prompts:
+
+```
+prompts/mytts/
+  summary.md
+  notification.md
+```
+
+Each opens with a `<!-- ... -->` block describing the prompt; the rest is
+the system message itself.
+
+Drop the Python file into `providers/mytts.py`, set `MYTTS_API_KEY` in
+your env, set `tts_provider: "mytts"` in `config.json`, and you're live.

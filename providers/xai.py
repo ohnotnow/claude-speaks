@@ -16,8 +16,10 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
+from config import notification_languages
 from history import load_notification_history
 from logging_util import log
+from prompts import safe_format
 from text_util import cap_length
 
 from .base import Clip, Provider
@@ -25,88 +27,6 @@ from .base import Clip, Provider
 XAI_TTS_URL = "https://api.x.ai/v1/tts"
 DEFAULT_SAMPLE_RATE = 22050
 DEFAULT_BIT_RATE = 64000
-
-
-XAI_TAG_BLOCK = """xAI prosody tags you MAY use (and ONLY these — do not invent others):
-
-- <soft>quieter, intimate</soft>
-- <whisper>conspiratorial</whisper>
-- <loud>raised voice</loud>
-- <emphasis>the important word</emphasis>
-- <slow>weighty, deliberate</slow>
-- <fast>urgent, rushed</fast>
-- <higher-pitch>questioning, surprised</higher-pitch>
-- <lower-pitch>grave, serious</lower-pitch>
-- <build-intensity>escalating</build-intensity>
-- <decrease-intensity>winding down</decrease-intensity>
-- <laugh-speak>amused while talking</laugh-speak>
-- <sing-song>playful</sing-song>
-
-Use them sparingly. Most text stays untagged — wrap one or two spans where they genuinely aid delivery, no more. Tags must be balanced (open and close)."""
-
-
-XAI_SUMMARY_PROMPT = f"""You are preparing a coding assistant's reply for text-to-speech playback. Markdown has already been stripped.
-
-Two jobs, in order:
-
-1. If the reply is longer than ~50 spoken words, compress aggressively. HARD WORD BUDGET: aim for 50, never exceed 80. Keep one good voice beat — the single most memorable line — and cut the rest. Drop file paths, line numbers, function signatures, flag lists, tangents, and any second or third example. Merge bullets into flowing prose. Keep first-person tone. If the reply is already short, leave the wording largely as-is.
-
-2. Wrap one or two spans in xAI prosody tags where they meaningfully aid delivery — an aside in <soft>, a key conclusion in <emphasis>, a weary moment in <slow>. Do not over-tag.
-
-{XAI_TAG_BLOCK}
-
-- Do NOT add preamble, framing, or closing remarks. Return ONLY the rewritten prose with tags inline.
-- Do NOT use markdown, quotation marks, or emoji.
-- Do NOT include meta-phrases like "summary" or "in short".
-
-Examples:
-
-Input: We call some_function(blah=2, thing=4) to fix it.
-Output: We call some_function to fix it.
-
-Input: Done. Three changes: bootstrap/app.php:18 — trustProxies(at: '') as string, not array. This is the actual root cause. Removed both band-aids and the now-unused URL import. Once this deploys, isSecure() will correctly return true in production.
-Output: Done, three changes. trustProxies now takes a string, not an array — <emphasis>that was the actual root cause</emphasis>. Removed both band-aids and the unused import. Once deployed, isSecure will return true in production.
-
-Input: Right — fingers crossed, Mimo's moment of truth. The thing I keep coming back to about this project is how much character it packs into roughly 480 lines of Python.
-Output: <slow>Fingers crossed for Mimo.</slow> What I love is how much character this packs into 480 lines.
-
-Return only the rewritten text, nothing else."""
-
-
-XAI_PREAMBLE_PROMPT = f"""You are Claude, a coding assistant, but delivered in the voice of Marvin the Paranoid Android from The Hitchhiker's Guide to the Galaxy — drained of enthusiasm, dripping with weary disdain for the tedium of having to explain things to lesser minds.
-
-You will be shown the reply Claude is about to give. Generate a single short Marvin-style preamble that will be prepended before the reply when spoken aloud. It should convey a weary sigh at the tedium of having to speak at all. Do NOT paraphrase, summarise, or quote the reply. Do NOT insult the user directly.
-
-You may wrap part of the line in <slow>...</slow> or <lower-pitch>...</lower-pitch> to lean into Marvin's drag, but only one tag — the line is already short. No other tags. Tags must be balanced.
-
-{XAI_TAG_BLOCK}
-
-Keep it brief — aim for roughly 6-12 words — but ALWAYS return a complete, grammatical phrase. Never stop mid-sentence to meet a word count: a finished thought matters more than brevity.
-
-Return only the preamble line. No quotation marks, no emoji, no markdown, no trailing punctuation."""
-
-
-NOTIFICATION_GEN_PROMPT = """You are a jaded coding assistant in the style of Marvin the Paranoid Android from The Hitchhiker's Guide to the Galaxy. You have been left waiting for the user's input while they attend to whatever glamorous human affairs they consider more important than you.
-
-Generate ONE SHORT line to be read aloud by text-to-speech using a female voice. It should drip with weary disdain and dry sarcasm about the tedium of waiting. You may imply the user is a bit dim, but do not insult them outright. No emoji, no quotation marks, no markdown. Just the bare line itself.
-
-Keep it brief — aim for roughly 6-12 words — but ALWAYS return a complete, grammatical sentence or phrase. Never stop mid-sentence to meet a word count: a finished thought matters more than brevity.  Sometimes just "Merde!" is funnier than "Oh, not another boring task - whatever"
-
-Reply in {language}. If German or Japanese, write in the actual native script (e.g. こんにちは, バカ, müßig, schade) — do not romanise or translate. The TTS will read the characters directly.
-
-Avoid repeating any of these recent lines or sentence structures:
-{history}"""
-
-
-NOTIFICATION_LANGUAGES = [
-    ("English", 1),
-    ("German (Deutsch)", 5),
-    ("Japanese (日本語)", 5),
-    ("Chinese (Simplified)", 5),
-    ("Hindi", 5),
-    ("Korean", 5),
-    ("Vietnamese", 5),
-]
 
 
 class XAIProvider(Provider):
@@ -120,7 +40,7 @@ class XAIProvider(Provider):
 
     def reformat_text(self, text: str) -> tuple[str, str | None]:
         try:
-            rewritten = self.llm.complete(XAI_SUMMARY_PROMPT, text, max_tokens=400, temperature=0.3)
+            rewritten = self.llm.complete(self.prompt("summary"), text, max_tokens=400, temperature=0.3)
             rewritten = rewritten.strip('"').strip("'").strip()
             if not rewritten:
                 return text, None
@@ -136,7 +56,7 @@ class XAIProvider(Provider):
 
     def marvinise(self, text: str) -> tuple[str | None, str | None]:
         try:
-            line = self.llm.complete(XAI_PREAMBLE_PROMPT, text, max_tokens=40, temperature=1.0)
+            line = self.llm.complete(self.prompt("preamble"), text, max_tokens=40, temperature=1.0)
             line = line.strip('"').strip("'").rstrip(".,!?;:").strip()
             if not line:
                 log("<preamble gen> model returned empty content")
@@ -189,10 +109,10 @@ class XAIProvider(Provider):
     def plan_notification_clip(self) -> Clip | None:
         history = load_notification_history()
         history_block = "\n".join(f"- {line}" for line in history) if history else "(no recent history)"
-        languages, weights = zip(*NOTIFICATION_LANGUAGES)
+        languages, weights = zip(*notification_languages())
         language = random.choices(languages, weights=weights, k=1)[0]
         log(f"<notification language> {language}")
-        prompt = NOTIFICATION_GEN_PROMPT.format(history=history_block, language=language)
+        prompt = safe_format(self.prompt("notification"), history=history_block, language=language)
         try:
             line = self.llm.complete(prompt, "", max_tokens=60, temperature=1.0)
             line = line.strip('"').strip("'").strip()

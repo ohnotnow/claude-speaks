@@ -12,16 +12,22 @@ After the provider-pluggable refactor:
 main.py            ~85 lines  thin entry point: stdin → provider → audio
 llm.py             ~30 lines  LLM(model).complete(system, user) — wraps litellm
 audio.py          ~135 lines  stitch + play, archive rotation, word replacements
-config.py          ~55 lines  load_config, load_env_file, classifier_model, tts_provider, features
+config.py          ~90 lines  load_config, load_env_file, classifier_model, tts_provider, features, notification_languages
 logging_util.py    ~35 lines  log, trim_log, LOG_FILE, PROJECT_DIR
 text_util.py       ~25 lines  strip_markdown, cap_length
 history.py         ~25 lines  notification-history.txt read/append
+prompts.py         ~50 lines  load_prompt(provider, name) — local-first lookup + comment strip; safe_format
 providers/
-  base.py          ~55 lines  Provider abstract base + Clip dataclass
+  base.py          ~60 lines  Provider abstract base + Clip dataclass + self.prompt() helper
   __init__.py      ~30 lines  auto-discovery via pkgutil.iter_modules
-  mistral.py      ~275 lines  full Mistral implementation
-  xai.py          ~230 lines  full xAI implementation
+  mistral.py      ~205 lines  full Mistral implementation
+  xai.py          ~165 lines  full xAI implementation
   README.md                   guide for adding a new provider
+prompts/
+  README.md                   pointer file for end-users (override mechanism)
+  mistral/                    classifier.md, summary.md, preamble.md, notification.md
+  xai/                        summary.md, preamble.md, notification.md
+prompts.local/                gitignored; user overrides drop in here with the same layout
 ```
 
 - Python 3.14, dependencies managed via `uv` (`pyproject.toml`, `uv.lock`).
@@ -45,10 +51,13 @@ Anything else is logged as `<unhandled event>` and ignored.
 ## Provider interface
 
 The single most important architectural fact: provider-specific behaviour
-lives in `providers/<name>.py`, not in `main.py`. Each file subclasses
-`Provider` and implements `plan_stop_clips`, `plan_notification_clip`, and
-`synthesise`. `main.py` knows nothing about Mistral, xAI, classifiers, tag
-vocabularies, or prompts — it just asks the provider for clips.
+lives in `providers/<name>.py` plus `prompts/<name>/*.md`, not in
+`main.py`. Each Python file subclasses `Provider` and implements
+`plan_stop_clips`, `plan_notification_clip`, and `synthesise`. The system
+prompts the provider sends to the LLM live as separate markdown files
+under `prompts/<name>/`, accessed via `self.prompt("preamble")` etc.
+`main.py` knows nothing about Mistral, xAI, classifiers, tag vocabularies,
+or prompts — it just asks the provider for clips.
 
 The contract is in `providers/base.py`. Worked examples:
 
@@ -203,11 +212,52 @@ the prompt to suppress repetition. The provider reads via
 on the way out. Don't accidentally clobber this when changing
 notification logic — it's load-bearing for variety.
 
+## Prompt overrides
+
+Prompts live as markdown files, not Python strings. `prompts.py`
+exposes `load_prompt(provider, name)` which checks
+`prompts.local/<provider>/<name>.md` first (gitignored user override),
+falls back to `prompts/<provider>/<name>.md` (shipped default), and
+strips a leading `<!-- ... -->` HTML-comment block from whichever it
+loaded. Both missing → `FileNotFoundError` (install is broken).
+
+`Provider.prompt(name)` on the base class wraps that. So inside a
+provider, getting a system prompt looks like:
+
+```python
+self.llm.complete(self.prompt("summary"), user_text, max_tokens=400)
+```
+
+Two consequences worth holding in mind:
+
+- The shipped `prompts/<provider>/<name>.md` files open with a
+  `<!-- ... -->` doc block describing the prompt's purpose, the method
+  that calls it, and any `{placeholders}` it accepts. The block is
+  stripped at load time so it never reaches the model. **HTML comments
+  cannot contain a literal `-->` in their body** — the regex stops at
+  the first one and you get a half-stripped prompt. Caught this once
+  the hard way.
+- Format-string substitution on the notification prompt uses
+  `prompts.safe_format(template, **kwargs)`, which falls back to the
+  raw template on any `KeyError`/`IndexError`/`ValueError` and logs
+  `<prompt format error>`. This is for when a user's custom prompt has
+  a stray `{` that isn't a real placeholder — keeps the hook running
+  rather than crashing the event.
+
+`notification_languages` (the weighted list of languages the idle quip
+can be generated in) is no longer a per-provider Python constant. It
+moved to `config.json` (read via `config.notification_languages()`),
+defaulting to the original seven-language list if the key is missing
+or malformed. To get English-only quips, the user sets
+`"notification_languages": [["English", 1]]`.
+
 ## Things to be careful about when editing
 
-- Changing the prompt strings in any provider file directly affects what
-  the user hears. The examples inside the prompts are tuned — don't
-  casually rewrite them.
+- Changing the prompt files in `prompts/<provider>/` directly affects
+  what the user hears. The examples inside the prompts are tuned —
+  don't casually rewrite them. If you do edit one, remember the user's
+  `prompts.local/<provider>/<name>.md` (if they have one) wins, so a
+  default change won't help anyone who's already overridden it.
 - The "always return a complete grammatical phrase, never stop mid-sentence
   to meet a word count" guidance in the prompts is deliberate. The user
   has noticed truncated lines before and asked for this.
@@ -215,8 +265,10 @@ notification logic — it's load-bearing for variety.
   summariser. The summariser usually keeps things well under it; the cap
   is for when the summariser fails or is skipped. Each provider applies
   it inside `plan_stop_clips` via `cap_length(...)`.
-- New TTS providers go in `providers/<name>.py`. See `providers/README.md`
-  for the contract, the worked examples, and the sample-rate constraint.
+- New TTS providers go in `providers/<name>.py` *and* a matching
+  `prompts/<name>/` directory of default prompts. See
+  `providers/README.md` for the contract, the worked examples, and the
+  sample-rate constraint.
 
 ## Conventions the user cares about
 

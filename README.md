@@ -33,10 +33,12 @@ waiting for permission — Marvin pipes up with a short weary quip in the
 notification voice (a separate role from monologue, so the idle nag can
 have its own voice and language). A rolling history of recent lines is
 fed back into the prompt to stop him repeating himself, and Python
-rolls a weighted die to pick the language — currently English, German,
-Japanese, Chinese, Hindi, Korean, or Vietnamese — so the line arrives
-in something different each time. English is weighted at 1, the other
-six at 5 each, so English shows up roughly one time in 31.
+rolls a weighted die to pick the language — by default English, German,
+Japanese, Chinese, Hindi, Korean, or Vietnamese, with English weighted
+at 1 and the others at 5 each (so English shows up roughly one time in
+31). The list is editable in `config.json` — set it to a single
+language if multilingual Marvin isn't your thing. See
+[Customising the personality](#customising-the-personality).
 
 If any of the LLM calls fail, the hook prepends a short spoken heads-up
 ("heads up — the summariser call fell over, raw reply coming up") before
@@ -128,6 +130,7 @@ whichever speech backend you fancy. They don't have to share a vendor.
 | `gap_file` | `0_75s` | Which silent mp3 in `gaps/` to stitch between the preamble and the main reply. See below. |
 | `word_replacements` | `{}` | Phonetic swap map — see [Word replacements](#word-replacements). |
 | `features` | all `true` | Per-stage toggles — see [Features](#features). |
+| `notification_languages` | seven-language weighted list (see below) | Which languages the idle quip can be generated in, and how often. See [Customising the personality](#customising-the-personality). |
 
 ### Voices
 
@@ -339,6 +342,91 @@ hits the TTS, regardless of provider. Matching is case-insensitive and on word b
 `config.example.json` ships with a starter set — copy it to `config.json`
 and edit to taste. If the section's missing or malformed, the hook just
 skips the step.
+
+## Customising the personality
+
+The Marvin shtick is the default, not the law. Each provider's prompts
+live as plain markdown files under `prompts/<provider>/` and are
+overrideable per-user without forking the project.
+
+### The directory layout
+
+```
+prompts/                   ← shipped defaults, checked in.
+  mistral/
+    classifier.md          (Mistral only — picks one of nine emotional styles)
+    summary.md             (compresses long replies for TTS)
+    preamble.md            (the Marvin sigh before the reply)
+    notification.md        (the idle "still waiting" quip)
+  xai/
+    summary.md             (compresses + adds inline prosody tags)
+    preamble.md            (the Marvin sigh, with prosody tags allowed)
+    notification.md        (the idle quip)
+
+prompts.local/             ← your overrides, gitignored.
+  mistral/
+    notification.md        (overrides only this one; others fall through)
+```
+
+At runtime `prompts.local/<provider>/<name>.md` wins; if it's absent,
+the matching `prompts/<provider>/<name>.md` is used. So you only need
+to copy the prompts you actually want to change, and `git pull` for
+upstream fixes never touches `prompts.local/`.
+
+### A worked example: making Marvin cheerful
+
+```bash
+mkdir -p prompts.local/mistral
+cp prompts/mistral/preamble.md prompts.local/mistral/preamble.md
+$EDITOR prompts.local/mistral/preamble.md
+```
+
+Rewrite the prompt body to taste (the file's leading `<!-- ... -->`
+comment block tells you what the prompt is for and what placeholders
+are available — see below). Save, run any Claude Code turn, and the new
+voice takes over. To revert, delete the file in `prompts.local/`.
+
+### What's safe to edit, what isn't
+
+The shipped prompts open with an HTML comment block documenting the
+prompt's purpose, any `{placeholders}` it uses, and which Provider
+method calls it. That comment block is **stripped at load time** by
+`prompts.py`, so leaving it in your override copy is harmless — it
+won't get read aloud — and editing or deleting it is fine.
+
+The notification prompts use two placeholders:
+
+- `{language}` — picked at random from `notification_languages` in
+  `config.json`. Drop this and Marvin will freestyle the language
+  himself (with mixed results).
+- `{history}` — a bullet list of the last ten quips from
+  `notification-history.txt`, used to nudge against repetition. Drop
+  this if you'd rather he repeat himself.
+
+If your custom prompt accidentally introduces a stray `{` (a JSON
+example, say), the hook logs `<prompt format error>` and falls back to
+the unformatted template rather than crashing.
+
+### Just the languages, please
+
+If the personality's fine but you want to disable the multi-language
+notification roulette, set `notification_languages` in `config.json`
+to a single entry:
+
+```json
+"notification_languages": [["English", 1]]
+```
+
+The format is a list of `[name, weight]` pairs. The name is sent
+verbatim to the LLM as the language to write in (so "Glaswegian" or
+"medieval English" both work — the LLM does the rest). Weights are
+positive integers; relative, not absolute.
+
+### Turning a stage off entirely
+
+Often easier than rewriting a prompt: set `features.monologue` or
+`features.notification` to `false` in `config.json` to skip the
+relevant LLM call (and clip) entirely. See [Features](#features).
 
 ## Shutting Marvin up mid-sentence
 
