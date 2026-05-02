@@ -39,12 +39,20 @@ summariser) via `self.llm.complete(system_prompt, user_text)`. Run them in
 parallel with a `ThreadPoolExecutor` if there's more than one — Claude Code
 blocks on the hook returning, so latency matters.
 
+Respect `self.features` — a `{"monologue": bool, "main": bool, "notification": bool}`
+dict from `config.json`. If `monologue` is off, skip the preamble LLM call and
+don't emit the preamble clip; if `main` is off, skip the summariser (and any
+classifier) and don't emit the main clip. Don't pay for an LLM call whose
+output you'll throw away.
+
 `plan_notification_clip() -> Clip | None` — Claude has gone idle or is
 waiting for permission. Return a single `Clip` for the spoken nag, or
 `None` to play the system fallback sound. The project-level
 `history.load_notification_history()` gives you the last 10 lines so you
 can feed them back into the prompt and stop the LLM repeating itself.
 `main.py` handles the *appending* side of history — you don't need to.
+The `features.notification` toggle is enforced in `main.py` before this
+method is called, so you can assume the user wants a clip.
 
 `synthesise(clip) -> bytes | None` — Turn one `Clip` into mp3 bytes. The
 HTTP call lives here. Catch your own exceptions, log with a tag like

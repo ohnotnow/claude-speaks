@@ -127,6 +127,7 @@ whichever speech backend you fancy. They don't have to share a vendor.
 | `provider_settings` | `{}` | Per-provider knobs (model id, output format, sample rate, etc.). Each provider reads its own slice via `self.settings`. See [provider_settings](#provider_settings). |
 | `gap_file` | `0_75s` | Which silent mp3 in `gaps/` to stitch between the preamble and the main reply. See below. |
 | `word_replacements` | `{}` | Phonetic swap map — see [Word replacements](#word-replacements). |
+| `features` | all `true` | Per-stage toggles — see [Features](#features). |
 
 ### Voices
 
@@ -291,6 +292,30 @@ truncate playback at the boundary. The xAI provider pins its output
 explicitly via `provider_settings.xai`; if you swap in a provider that
 emits something else, expect to either match the rate or replace the
 gaps and update `provider_settings` to match.
+
+### Features
+
+Three independent toggles let you switch off any of the spoken stages —
+useful if you want the Marvin preamble but not the full reply, or want
+silence when Claude is idle. Default is all three on, so omitting the
+block keeps the original behaviour.
+
+```json
+"features": {
+  "monologue": true,
+  "main": true,
+  "notification": false
+}
+```
+
+| Toggle | What it controls |
+|---|---|
+| `monologue` | The Marvin sigh that runs before the reply on Stop. Disabling it skips the preamble LLM call entirely — no wasted tokens. |
+| `main` | The summarised/spoken version of Claude's actual reply. Disabling it skips the summariser (and the Mistral tone classifier). Switching this off and leaving `monologue` on gives you only the Marvin quip — the use case you'd reach for if you only want the personality, not the recap. |
+| `notification` | The idle "still waiting" nag. Disabling it short-circuits the Notification handler entirely — no LLM call, no audio. |
+
+If both `monologue` and `main` are off, Stop events go quiet — nothing
+is synthesised or played. The hook still returns cleanly.
 
 ### Word replacements
 

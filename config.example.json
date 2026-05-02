@@ -1,6 +1,11 @@
 {
   "llm_model": "mistral/mistral-small-latest",
   "tts_provider": "mistral",
+  "features": {
+    "monologue": true,
+    "main": true,
+    "notification": true
+  },
   "voices": {
     "mistral": {
       "main": {"voice": "gb_jane"},

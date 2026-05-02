@@ -12,7 +12,7 @@ After the provider-pluggable refactor:
 main.py            ~85 lines  thin entry point: stdin → provider → audio
 llm.py             ~30 lines  LLM(model).complete(system, user) — wraps litellm
 audio.py          ~135 lines  stitch + play, archive rotation, word replacements
-config.py          ~45 lines  load_config, load_env_file, classifier_model, tts_provider
+config.py          ~55 lines  load_config, load_env_file, classifier_model, tts_provider, features
 logging_util.py    ~35 lines  log, trim_log, LOG_FILE, PROJECT_DIR
 text_util.py       ~25 lines  strip_markdown, cap_length
 history.py         ~25 lines  notification-history.txt read/append
@@ -149,6 +149,25 @@ The last 10 turns are also archived as `/tmp/claude-speaks-<stamp>.{mp3,txt}`
 pairs. The `.txt` records each clip's voice id and the exact text that was
 synthesised — useful when a voice sounds wrong and you need to know what
 was sent.
+
+## Feature toggles
+
+`config.json` has a `features` block with three booleans (defaults all `true`):
+`monologue`, `main`, `notification`. They're loaded by `config.features()` and
+threaded into the provider via `Provider.__init__(features=...)`.
+
+- `notification` is enforced in `main.handle_notification` — if off, the
+  handler returns before any LLM/TTS work. Providers don't need to know.
+- `monologue` and `main` are enforced inside each provider's
+  `plan_stop_clips`. Skip the corresponding LLM submission *and* the
+  resulting clip; the point is to avoid paying for output you'll throw
+  away. If both are off, return `[]`.
+- The "Heads up — the X call fell over" prepend is only useful when there's
+  a main clip to attach it to. If `main` is off, suppress the prepend.
+
+When adding a new provider, copy the gating pattern from `mistral.py` /
+`xai.py`. The base class defaults `self.features` to all-on so providers
+that ignore the field still work.
 
 ## Config and env
 

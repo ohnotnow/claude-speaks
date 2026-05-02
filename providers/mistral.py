@@ -192,32 +192,45 @@ class MistralProvider(Provider):
             return None, "preamble"
 
     def plan_stop_clips(self, text: str) -> list[Clip]:
+        want_monologue = self.features.get("monologue", True)
+        want_main = self.features.get("main", True)
+        if not want_monologue and not want_main:
+            log("<stop disabled> both monologue and main are off; nothing to speak")
+            return []
+
+        style, style_err = VoiceStyle.NEUTRAL, None
+        preamble, preamble_err = None, None
+        summary, summary_err = text, None
+
         with ThreadPoolExecutor(max_workers=3) as ex:
-            style_f = ex.submit(self.classify_tone, text)
-            preamble_f = ex.submit(self.marvinise, text)
-            summary_f = ex.submit(self.reformat_text, text)
-            style, style_err = style_f.result()
-            preamble, preamble_err = preamble_f.result()
-            summary, summary_err = summary_f.result()
+            style_f = ex.submit(self.classify_tone, text) if want_main else None
+            preamble_f = ex.submit(self.marvinise, text) if want_monologue else None
+            summary_f = ex.submit(self.reformat_text, text) if want_main else None
+            if style_f:
+                style, style_err = style_f.result()
+            if preamble_f:
+                preamble, preamble_err = preamble_f.result()
+            if summary_f:
+                summary, summary_err = summary_f.result()
 
         main_voice = self.voice_for("main", style=style.value)
         monologue_voice = self.voice_for("monologue")
         log(
             f"<stop> provider={self.name} main_voice={main_voice} "
-            f"monologue_voice={monologue_voice} preamble={preamble!r}"
+            f"monologue_voice={monologue_voice} preamble={preamble!r} "
+            f"features=monologue={want_monologue},main={want_main}"
         )
 
         failed = [name for name in (style_err, preamble_err, summary_err) if name]
-        if failed:
+        if failed and want_main:
             summary = f"Heads up — the {', '.join(failed)} call fell over. Raw reply coming up. " + summary
 
-        summary = cap_length(summary)
-
         clips: list[Clip] = []
-        if preamble:
+        if want_monologue and preamble:
             # Single trailing ellipsis gives the TTS a natural pause before the reply.
             clips.append(Clip(f"{preamble} ...", monologue_voice))
-        clips.append(Clip(summary, main_voice))
+        if want_main:
+            clips.append(Clip(cap_length(summary), main_voice))
         return clips
 
     def plan_notification_clip(self) -> Clip | None:

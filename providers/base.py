@@ -19,11 +19,12 @@ class Provider:
     api_key_env: str | None = None
     default_voices: dict[str, str] = {}
 
-    def __init__(self, llm, api_key=None, settings=None, voices_config=None):
+    def __init__(self, llm, api_key=None, settings=None, voices_config=None, features=None):
         self.llm = llm
         self.api_key = api_key
         self.settings = settings or {}
         self.voices_config = voices_config or {}
+        self.features = features if features is not None else {"monologue": True, "main": True, "notification": True}
 
     def voice_for(self, role: str, *, style: str | None = None) -> str:
         configured = self.voices_config.get(role)

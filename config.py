@@ -11,6 +11,7 @@ ENV_FILE = PROJECT_DIR / ".env"
 
 DEFAULT_LLM_MODEL = "mistral/mistral-small-latest"
 DEFAULT_TTS_PROVIDER = "mistral"
+DEFAULT_FEATURES = {"monologue": True, "main": True, "notification": True}
 
 
 def load_env_file(path: Path = ENV_FILE) -> None:
@@ -44,3 +45,11 @@ def classifier_model() -> str:
 
 def tts_provider() -> str:
     return (load_config().get("tts_provider") or DEFAULT_TTS_PROVIDER).lower()
+
+
+def features() -> dict[str, bool]:
+    raw = load_config().get("features") or {}
+    if not isinstance(raw, dict):
+        log(f"<features> expected object, got {type(raw).__name__}")
+        raw = {}
+    return {k: bool(raw.get(k, default)) for k, default in DEFAULT_FEATURES.items()}

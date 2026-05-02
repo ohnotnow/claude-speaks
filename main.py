@@ -12,7 +12,7 @@ import sys
 import litellm
 
 from audio import play_clips, play_fallback_sound
-from config import ENV_FILE, classifier_model, load_config, load_env_file, tts_provider
+from config import ENV_FILE, classifier_model, features, load_config, load_env_file, tts_provider
 from history import append_notification_history
 from llm import LLM
 from logging_util import log, trim_log
@@ -32,6 +32,9 @@ def handle_stop(payload: dict, provider) -> None:
 
 
 def handle_notification(provider) -> None:
+    if not provider.features.get("notification", True):
+        log("<notification disabled> skipping")
+        return
     clip = provider.plan_notification_clip()
     if not clip:
         log("<fallback> notification line generation failed; playing system sound")
@@ -71,6 +74,7 @@ def main() -> None:
         api_key=api_key,
         settings=(config.get("provider_settings") or {}).get(name) or {},
         voices_config=(config.get("voices") or {}).get(name) or {},
+        features=features(),
     )
 
     event = payload.get("hook_event_name")
