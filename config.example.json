@@ -25,13 +25,22 @@
       "main": {"voice": "Eve", "language": "en"},
       "monologue": {"voice": "Ara", "language": "fr"},
       "notification": {"voice": "Ara", "language": "ja"}
+    },
+    "elevenlabs": {
+      "main": {"voice": "6qpxBH5KUSDb40bij36w"},
+      "monologue": {"voice": "6qpxBH5KUSDb40bij36w"},
+      "notification": {"voice": "6qpxBH5KUSDb40bij36w"}
     }
   },
   "provider_settings": {
-    "_note": "Per-provider knobs. Each provider reads its own slice via self.settings; omit the block entirely to use built-in defaults. xAI's sample_rate / bit_rate must match the gap mp3s in gaps/ — mismatched rates silently truncate clip 2 onward.",
+    "_note": "Per-provider knobs. Each provider reads its own slice via self.settings; omit the block entirely to use built-in defaults. xAI's sample_rate / bit_rate and ElevenLabs' output_format must produce audio at the same rate as the gap mp3s in gaps/ — mismatched rates silently truncate clip 2 onward.",
     "xai": {
       "sample_rate": 22050,
       "bit_rate": 64000
+    },
+    "elevenlabs": {
+      "model_id": "eleven_v3",
+      "output_format": "mp3_22050_32"
     }
   },
   "gap_file": "0_75s",

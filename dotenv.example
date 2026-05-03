@@ -13,6 +13,7 @@
 
 MISTRAL_API_KEY=
 XAI_API_KEY=
+ELEVENLABS_API_KEY=
 
 # ─── LLM provider keys (used by litellm via llm_model in config.json) ───
 # Independent of the TTS provider above. Set the one matching the prefix
