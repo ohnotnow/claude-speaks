@@ -30,6 +30,11 @@
       "main": {"voice": "6qpxBH5KUSDb40bij36w"},
       "monologue": {"voice": "6qpxBH5KUSDb40bij36w"},
       "notification": {"voice": "6qpxBH5KUSDb40bij36w"}
+    },
+    "openai": {
+      "main": {"voice": "coral", "instructions": "Speak clearly and naturally, in a calm measured tone."},
+      "monologue": {"voice": "ash", "instructions": "Speak in the voice of Marvin the Paranoid Android: weary, deadpan, drained of enthusiasm."},
+      "notification": {"voice": "ash", "instructions": "Speak in the voice of Marvin the Paranoid Android: weary, deadpan, drained of enthusiasm."}
     }
   },
   "provider_settings": {
@@ -41,6 +46,11 @@
     "elevenlabs": {
       "model_id": "eleven_v3",
       "output_format": "mp3_22050_32"
+    },
+    "openai": {
+      "model": "gpt-4o-mini-tts",
+      "sample_rate": 22050,
+      "bit_rate": 56000
     }
   },
   "gap_file": "0_75s",

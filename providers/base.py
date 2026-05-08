@@ -14,6 +14,7 @@ class Clip:
     text: str
     voice: str
     language: str = "en"
+    instructions: str = ""
 
 
 class Provider:
