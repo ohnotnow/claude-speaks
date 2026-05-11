@@ -1,0 +1,10 @@
+name: hermes-speaks
+version: "1.0.0"
+description: Forward each Hermes final response to a claude-speaks-compatible HTTP hook for text-to-speech.
+provides_hooks:
+  - post_llm_call
+requires_env:
+  - name: HERMES_SPEAKS_URL
+    description: URL of the text-to-speech hook endpoint, e.g. http://your-mac.local:8765/hook
+  - name: HERMES_SPEAKS_TOKEN
+    description: Bearer token shared with the text-to-speech hook endpoint

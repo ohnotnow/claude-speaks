@@ -222,14 +222,15 @@ client machine and it gets injected into every payload:
 export CLAUDE_SPEAKS_OVERRIDES='{"voices":{"mistral":{"main":"fr_marie"}}}'
 
 # For Hermes (via systemd unit, ~/.profile, however Hermes is launched)
-export CLAUDE_SPEAKS_OVERRIDES='{"voices":{"mistral":{"main":"gb_jane_confident"}}}'
+export HERMES_SPEAKS_OVERRIDES='{"voices":{"mistral":{"main":"gb_jane_confident"}}}'
 ```
 
 The Hermes plugin additionally ships with a sensible default of
 `{"features": {"monologue": false, "notification": false}}` so
 Marvin's preamble doesn't gatecrash a non-Claude agent. Setting
-`CLAUDE_SPEAKS_OVERRIDES` replaces that default, so include the
-features block yourself if you still want those stages off.
+`HERMES_SPEAKS_OVERRIDES` (or its `CLAUDE_SPEAKS_OVERRIDES` fallback)
+replaces that default, so include the features block yourself if you
+still want those stages off.
 
 Each merged-in overlay is logged on the Mac as `<config overrides>`
 so you can tell which client triggered which voice when something
@@ -241,12 +242,45 @@ The endpoint only cares about two JSON keys — `hook_event_name`
 (`"Stop"` or `"Notification"`) and `last_assistant_message` — so any
 agent that lets you run code at end-of-turn can drive it.
 
-`scripts/hermes_speaks_plugin.py` is a worked example for
-[Hermes](https://nousresearch.com)' `transform_llm_output` hook: it
-wraps the model's reply in the right JSON shape, POSTs to the server,
-and returns `None` so Hermes delivers the original text unchanged.
-Drop it in Hermes' plugin directory, set the same `CLAUDE_SPEAKS_URL`
-and `CLAUDE_SPEAKS_TOKEN` env vars, and the Mac speaks for Hermes too.
+`scripts/hermes-speaks/` ships a worked example for
+[Hermes](https://nousresearch.com): a proper Hermes plugin (manifest
+plus `__init__.py`) that hooks `post_llm_call`, wraps the final reply
+in the right JSON shape, POSTs to the server in a background thread,
+and returns `None` so Hermes delivers its own text unchanged.
+
+Install it on the Pi (or wherever Hermes runs) by copying the two
+files into Hermes' user-plugins directory and enabling it:
+
+```bash
+mkdir -p ~/.hermes/plugins/hermes-speaks
+cp scripts/hermes-speaks/plugin.yaml \
+   scripts/hermes-speaks/__init__.py \
+   ~/.hermes/plugins/hermes-speaks/
+hermes plugins enable hermes-speaks
+```
+
+Then set the URL and token where Hermes can see them — Hermes-specific
+names are preferred, with the existing `CLAUDE_SPEAKS_*` vars accepted
+as a fallback so you don't have to set them twice if Claude Code on
+the same box already does:
+
+```bash
+export HERMES_SPEAKS_URL='http://your-mac.local:8765/hook'
+export HERMES_SPEAKS_TOKEN='same-string-as-on-the-mac'
+# Optional — overrides config.json on the Mac for Hermes' payloads only:
+export HERMES_SPEAKS_OVERRIDES='{"voices":{"mistral":{"main":"gb_jane_confident"}}}'
+```
+
+Restart Hermes (`hermes gateway restart`, or just start a fresh
+`hermes` session) so the plugin loads and picks up the env vars. The
+plugin defaults to disabling the `monologue` and `notification` stages
+— Marvin's sigh and the idle nag belong to Claude, not Hermes — so out
+of the box you'll get Hermes' reply spoken in the `main` voice and
+nothing else. Override `HERMES_SPEAKS_OVERRIDES` to change that.
+
+If `HERMES_SPEAKS_URL`/`TOKEN` aren't set (and neither are their
+`CLAUDE_SPEAKS_*` fallbacks), the plugin silently no-ops — handy when
+Hermes is sometimes on the same network as the Mac and sometimes not.
 
 ## Configuration
 
