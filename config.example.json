@@ -53,6 +53,10 @@
       "bit_rate": 56000
     }
   },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8765
+  },
   "gap_file": "0_75s",
   "word_replacements": {
     "vite": "veet",

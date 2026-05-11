@@ -64,7 +64,7 @@ class MistralProvider(Provider):
         if isinstance(configured, dict):
             configured = configured.get("voice")
         base = configured if isinstance(configured, str) and configured else self.default_voices.get(role, self.default_voices["main"])
-        if role == "main" and style and style != "neutral":
+        if role == "main" and style:
             return f"{base}_{style}"
         return base
 

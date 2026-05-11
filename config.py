@@ -1,7 +1,16 @@
-"""Config and dotenv loading. Read fresh on every call — the hook runs once per turn."""
+"""Config and dotenv loading. Read fresh on every call — the hook runs once per turn.
+
+Per-request overlays: callers can wrap a block of work in ``config_overlay(d)``
+and any ``load_config()`` call made on the same thread inside that block sees
+the on-disk config deep-merged with ``d``. Used by ``main.process_payload`` so
+HTTP clients (Hermes, the Pi script, …) can override voices / features /
+provider for a single request without touching ``config.json`` on disk.
+"""
 
 import json
 import os
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from logging_util import PROJECT_DIR, log
@@ -34,7 +43,39 @@ def load_env_file(path: Path = ENV_FILE) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-def load_config() -> dict:
+_overlay_state = threading.local()
+
+
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursive merge — nested dicts merge key-by-key; anything else replaces."""
+    result = dict(base)
+    for key, value in overlay.items():
+        existing = result.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            result[key] = _deep_merge(existing, value)
+        else:
+            result[key] = value
+    return result
+
+
+@contextmanager
+def config_overlay(overrides: dict | None):
+    """Layer ``overrides`` on top of the on-disk config for the calling thread."""
+    if not isinstance(overrides, dict) or not overrides:
+        yield
+        return
+    stack = getattr(_overlay_state, "stack", None)
+    if stack is None:
+        stack = []
+        _overlay_state.stack = stack
+    stack.append(overrides)
+    try:
+        yield
+    finally:
+        stack.pop()
+
+
+def _load_from_disk() -> dict:
     if not CONFIG_FILE.is_file():
         return {}
     try:
@@ -46,6 +87,13 @@ def load_config() -> dict:
         log(f"<config> expected object, got {type(data).__name__}")
         return {}
     return data
+
+
+def load_config() -> dict:
+    merged = _load_from_disk()
+    for overlay in getattr(_overlay_state, "stack", []):
+        merged = _deep_merge(merged, overlay)
+    return merged
 
 
 def classifier_model() -> str:

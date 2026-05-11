@@ -99,6 +99,155 @@ Then wire it up as a Stop hook in your Claude Code settings
 
 Restart your Claude Code session and Claude should start speaking back.
 
+## Remote mode (Raspberry Pi → Mac)
+
+If you run Claude Code on a headless box (a Raspberry Pi left ticking
+away, a remote server you've SSH'd into, etc.) but want the audio out
+of your Mac's speakers, `server.py` gives you a small HTTP shim.
+
+The Pi-side hook POSTs the same JSON it would normally hand to
+`main.py` on stdin; the Mac receives it, runs the full
+provider → LLM → TTS pipeline, and plays the audio locally. The Pi
+never sees a TTS response.
+
+### On the Mac (server side)
+
+1. Pick a shared secret and add it to `.env`:
+
+   ```
+   CLAUDE_SPEAKS_TOKEN=long-random-string-here
+   ```
+
+   (`python -c "import secrets; print(secrets.token_urlsafe(32))"`
+   generates a sensible one.)
+
+2. Optionally tweak `server.host` / `server.port` in `config.json`
+   (defaults: `127.0.0.1:8765`). For LAN access, bind to your LAN IP
+   or `0.0.0.0`; if your machines share a Tailscale / WireGuard mesh,
+   bind to that interface instead and keep it off the open network.
+
+3. Start the server:
+
+   ```bash
+   uv run server.py
+   ```
+
+   It logs to the same `stop-hook.log` as the local hook, tagged with
+   `<server ...>`.
+
+### On the Pi (client side)
+
+The repo ships `scripts/remote-hook.py` — stdlib-only Python, so the
+Pi doesn't need uv or any dependencies installed. On the Pi:
+
+1. Clone the repo (or just copy that one script).
+2. Set two env vars where Claude Code will see them (e.g. in
+   `~/.profile` or a wrapper):
+
+   ```
+   export CLAUDE_SPEAKS_TOKEN=same-string-as-on-the-mac
+   export CLAUDE_SPEAKS_URL=http://your-mac.local:8765/hook
+   ```
+
+3. Wire the script as the Stop / Notification hook in
+   `~/.claude/settings.json` on the Pi:
+
+   ```json
+   {
+     "hooks": {
+       "Stop": [
+         { "matcher": "", "hooks": [
+           { "type": "command", "command": "/usr/bin/env python3 /path/to/claude-speaks/scripts/remote-hook.py" }
+         ]}
+       ],
+       "Notification": [
+         { "matcher": "", "hooks": [
+           { "type": "command", "command": "/usr/bin/env python3 /path/to/claude-speaks/scripts/remote-hook.py" }
+         ]}
+       ]
+     }
+   }
+   ```
+
+The server replies with `202 Accepted` as soon as the payload is
+queued, so the Pi's hook returns in milliseconds — TTS work happens
+in a background thread on the Mac.
+
+A quick smoke test from the Pi:
+
+```bash
+curl -i http://your-mac.local:8765/health   # → 200 ok
+echo '{"hook_event_name":"Notification"}' \
+  | CLAUDE_SPEAKS_TOKEN=... CLAUDE_SPEAKS_URL=http://your-mac.local:8765/hook \
+    python3 scripts/remote-hook.py
+```
+
+If the token is missing or wrong you'll get `401 unauthorized`; if the
+server can't read its own `CLAUDE_SPEAKS_TOKEN`, it refuses to start.
+
+### Per-request overrides
+
+If you've got Claude on the Mac, Claude on the Pi, and Hermes all
+piping audio through the same Mac, hearing the same voice three times
+gets confusing fast. Every payload accepts an optional `claude_speaks`
+block that deep-merges onto `config.json` *for that request only* — no
+restart, no second config file. Anything from `config.json` is fair
+game: `tts_provider`, `voices`, `features`, `llm_model`,
+`provider_settings`, etc.
+
+Example payload from the Pi, configuring "rpi-claude" to use a French
+Marvin voice and skip the idle nag:
+
+```json
+{
+  "hook_event_name": "Stop",
+  "last_assistant_message": "All done.",
+  "claude_speaks": {
+    "voices": {
+      "mistral": {"main": "fr_marie"}
+    },
+    "features": {
+      "notification": false
+    }
+  }
+}
+```
+
+Both shipped clients pick this up automatically via the
+`CLAUDE_SPEAKS_OVERRIDES` env var — set it to a JSON object on the
+client machine and it gets injected into every payload:
+
+```bash
+# On the Pi
+export CLAUDE_SPEAKS_OVERRIDES='{"voices":{"mistral":{"main":"fr_marie"}}}'
+
+# For Hermes (via systemd unit, ~/.profile, however Hermes is launched)
+export CLAUDE_SPEAKS_OVERRIDES='{"voices":{"mistral":{"main":"gb_jane_confident"}}}'
+```
+
+The Hermes plugin additionally ships with a sensible default of
+`{"features": {"monologue": false, "notification": false}}` so
+Marvin's preamble doesn't gatecrash a non-Claude agent. Setting
+`CLAUDE_SPEAKS_OVERRIDES` replaces that default, so include the
+features block yourself if you still want those stages off.
+
+Each merged-in overlay is logged on the Mac as `<config overrides>`
+so you can tell which client triggered which voice when something
+unexpected comes out of the speakers.
+
+### Other agents (Hermes, etc.)
+
+The endpoint only cares about two JSON keys — `hook_event_name`
+(`"Stop"` or `"Notification"`) and `last_assistant_message` — so any
+agent that lets you run code at end-of-turn can drive it.
+
+`scripts/hermes_speaks_plugin.py` is a worked example for
+[Hermes](https://nousresearch.com)' `transform_llm_output` hook: it
+wraps the model's reply in the right JSON shape, POSTs to the server,
+and returns `None` so Hermes delivers the original text unchanged.
+Drop it in Hermes' plugin directory, set the same `CLAUDE_SPEAKS_URL`
+and `CLAUDE_SPEAKS_TOKEN` env vars, and the Mac speaks for Hermes too.
+
 ## Configuration
 
 API keys live in `.env`. Everything else lives in `config.json` (copy

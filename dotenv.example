@@ -25,3 +25,18 @@ ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
 # (MISTRAL_API_KEY above doubles as the LLM key when llm_model is a
 # Mistral model — no need to repeat it.)
+
+# ─── Remote-mode shared secret ───────────────────────────────────────
+# Only needed if you run `uv run server.py` on this Mac and have another
+# machine (e.g. a Raspberry Pi) POST hook payloads to it. Pick something
+# long and random — e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+# The same value goes on the client side (scripts/remote-hook.py reads it
+# from CLAUDE_SPEAKS_TOKEN).
+
+CLAUDE_SPEAKS_TOKEN=
+
+# Optional, client-side only: per-request config overrides as a JSON
+# object. Lets each client (Pi, Hermes, …) have its own voice / features
+# without editing config.json on the Mac. Read by scripts/remote-hook.py
+# and scripts/hermes_speaks_plugin.py. Example:
+#   CLAUDE_SPEAKS_OVERRIDES='{"features":{"monologue":false},"voices":{"mistral":{"main":"fr_marie"}}}'
