@@ -4,6 +4,7 @@ import re
 
 MAX_SPEAK_CHARS = 800
 SUMMARY_WORD_THRESHOLD = 60
+SHORT_REPLY_WORD_THRESHOLD = 8
 
 
 def strip_markdown(text: str) -> str:

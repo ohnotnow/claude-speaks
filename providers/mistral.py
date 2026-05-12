@@ -17,7 +17,18 @@ from config import notification_languages
 from history import load_notification_history
 from logging_util import log
 from prompts import safe_format
-from text_util import SUMMARY_WORD_THRESHOLD, cap_length
+from text_util import SHORT_REPLY_WORD_THRESHOLD, SUMMARY_WORD_THRESHOLD, cap_length
+
+LONG_LENGTH_GUIDANCE = (
+    "Keep it brief — aim for roughly 6-12 words — but ALWAYS return a complete, "
+    "grammatical phrase. Never stop mid-sentence to meet a word count: a finished "
+    "thought matters more than brevity."
+)
+SHORT_LENGTH_GUIDANCE = (
+    "The reply you are reacting to is very short, so keep this VERY brief too — "
+    "1 to 3 words is ideal, like a single weary mutter (\"Whatever\", \"Finally\", "
+    "\"Done — thank god\"). Do not pad it out into a full sentence."
+)
 
 from .base import Clip, Provider
 
@@ -96,7 +107,9 @@ class MistralProvider(Provider):
 
     def marvinise(self, text: str) -> tuple[str | None, str | None]:
         try:
-            line = self.llm.complete(self.prompt("preamble"), text, max_tokens=40, temperature=1.0)
+            guidance = SHORT_LENGTH_GUIDANCE if len(text.split()) <= SHORT_REPLY_WORD_THRESHOLD else LONG_LENGTH_GUIDANCE
+            system_prompt = safe_format(self.prompt("preamble"), length_guidance=guidance)
+            line = self.llm.complete(system_prompt, text, max_tokens=40, temperature=1.0)
             line = line.strip('"').strip("'").rstrip(".,!?;:").strip()
             if not line:
                 log("<preamble gen> model returned empty content")
