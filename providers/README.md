@@ -121,6 +121,41 @@ for the shape.
 `safe_format` logs the error and returns the unformatted template
 instead of crashing the hook.
 
+## Personas
+
+Personas are a top-level abstraction (no provider axis) that let users
+swap the *character* speaking the monologue and notification without
+forking your prompt files. The convention:
+
+- Your `preamble.md` and `notification.md` accept a `{persona}`
+  placeholder, slotted into a sentence like *"in the voice of:
+  {persona}"*.
+- The persona text is loaded by the base class via
+  `self.persona(role)` — returns the resolved character description
+  (file lookup or freeform fallback) or `None` if the user has nulled
+  it out.
+- Always coerce with `self.persona(role) or ""` when passing to
+  `safe_format`; `None` would otherwise stringify into the prompt.
+
+```python
+system_prompt = safe_format(
+    self.prompt("preamble"),
+    length_guidance=...,
+    persona=self.persona("monologue") or "",
+)
+```
+
+For the `main` role the persona is **appended** to the summariser
+system prompt at runtime (not template-substituted) — when set, it
+asks the model to preserve a beat of the existing voice rather than
+to adopt one. The xai/openai/elevenlabs providers all show the
+pattern. If `self.persona("main")` returns `None` (the default),
+behaviour is byte-identical to before.
+
+Users who've overridden a prompt in `prompts.local/` without including
+`{persona}` keep working untouched — `safe_format` silently ignores
+the extra kwarg.
+
 ## Provider-specific settings
 
 If your provider has knobs the user might want to override — model id,

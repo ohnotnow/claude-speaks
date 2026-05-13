@@ -44,7 +44,14 @@ class ElevenLabsProvider(Provider):
 
     def reformat_text(self, text: str) -> tuple[str, str | None]:
         try:
-            rewritten = self.llm.complete(self.prompt("summary"), text, max_tokens=400, temperature=0.3)
+            system_prompt = self.prompt("summary")
+            persona = self.persona("main")
+            if persona:
+                system_prompt += (
+                    f"\n\nThe reply you are about to compress is written in the voice of: {persona}. "
+                    "Preserve a beat that captures that voice."
+                )
+            rewritten = self.llm.complete(system_prompt, text, max_tokens=400, temperature=0.3)
             rewritten = rewritten.strip('"').strip("'").strip()
             if not rewritten:
                 return text, None
@@ -60,7 +67,11 @@ class ElevenLabsProvider(Provider):
 
     def marvinise(self, text: str) -> tuple[str | None, str | None]:
         try:
-            line = self.llm.complete(self.prompt("preamble"), text, max_tokens=40, temperature=1.0)
+            system_prompt = safe_format(
+                self.prompt("preamble"),
+                persona=self.persona("monologue") or "",
+            )
+            line = self.llm.complete(system_prompt, text, max_tokens=40, temperature=1.0)
             line = line.strip('"').strip("'").rstrip(".,!?;:").strip()
             if not line:
                 log("<preamble gen> model returned empty content")
@@ -113,7 +124,12 @@ class ElevenLabsProvider(Provider):
         languages, weights = zip(*notification_languages())
         language = random.choices(languages, weights=weights, k=1)[0]
         log(f"<notification language> {language}")
-        prompt = safe_format(self.prompt("notification"), history=history_block, language=language)
+        prompt = safe_format(
+            self.prompt("notification"),
+            history=history_block,
+            language=language,
+            persona=self.persona("notification") or "",
+        )
         try:
             line = self.llm.complete(prompt, "", max_tokens=60, temperature=1.0)
             line = line.strip('"').strip("'").strip()

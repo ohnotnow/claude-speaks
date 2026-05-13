@@ -6,7 +6,8 @@ providers/README.md for the full guide.
 
 from dataclasses import dataclass
 
-from prompts import load_prompt
+from config import personas
+from prompts import load_persona, load_prompt
 
 
 @dataclass
@@ -45,6 +46,12 @@ class Provider:
 
     def prompt(self, name: str) -> str:
         return load_prompt(self.name, name)
+
+    def persona(self, role: str) -> str | None:
+        value = personas().get(role)
+        if not value:
+            return None
+        return load_persona(value)
 
     def language_for(self, role: str) -> str:
         configured = self.voices_config.get(role)

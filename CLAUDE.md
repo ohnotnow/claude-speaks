@@ -12,11 +12,11 @@ After the provider-pluggable refactor:
 main.py            ~85 lines  thin entry point: stdin → provider → audio
 llm.py             ~30 lines  LLM(model).complete(system, user) — wraps litellm
 audio.py          ~135 lines  stitch + play, archive rotation, word replacements
-config.py          ~90 lines  load_config, load_env_file, classifier_model, tts_provider, features, notification_languages
+config.py         ~110 lines  load_config, load_env_file, classifier_model, tts_provider, features, personas, notification_languages
 logging_util.py    ~35 lines  log, trim_log, LOG_FILE, PROJECT_DIR
 text_util.py       ~25 lines  strip_markdown, cap_length
 history.py         ~25 lines  notification-history.txt read/append
-prompts.py         ~50 lines  load_prompt(provider, name) — local-first lookup + comment strip; safe_format
+prompts.py         ~75 lines  load_prompt(provider, name), load_persona(value) — local-first lookups + comment strip; safe_format
 providers/
   base.py          ~60 lines  Provider abstract base + Clip dataclass + self.prompt() helper
   __init__.py      ~30 lines  auto-discovery via pkgutil.iter_modules
@@ -28,6 +28,10 @@ prompts/
   mistral/                    classifier.md, summary.md, preamble.md, notification.md
   xai/                        summary.md, preamble.md, notification.md
 prompts.local/                gitignored; user overrides drop in here with the same layout
+personas/
+  README.md                   guide to the personas mechanism
+  marvin.md                   default character description, slotted into {persona}
+personas.local/               gitignored; user persona files drop in here (flat, no provider axis)
 ```
 
 - Python 3.14, dependencies managed via `uv` (`pyproject.toml`, `uv.lock`).
@@ -250,6 +254,57 @@ moved to `config.json` (read via `config.notification_languages()`),
 defaulting to the original seven-language list if the key is missing
 or malformed. To get English-only quips, the user sets
 `"notification_languages": [["English", 1]]`.
+
+## Personas
+
+A lighter-weight customisation layer than `prompts.local/`. The
+character speaking each role lives in `config.json` under `personas`;
+each value resolves via `prompts.load_persona(value)`:
+
+1. If `personas.local/<value>.md` exists, load it.
+2. Else if `personas/<value>.md` exists, load it.
+3. Otherwise, treat the value as a freeform character description and
+   pass it through verbatim.
+
+The resolution rule is deliberately dumb — no slug regex, no
+normalisation. A user writing `"monologue": "marvin"` expects a file
+lookup; one writing `"monologue": "a wildly excited pantomime dame"`
+expects passthrough. Both are predictable from glancing at the config.
+
+`config.personas()` reads with defaults `{monologue: marvin,
+notification: marvin, main: None}`. The base `Provider.persona(role)`
+wraps this and returns the resolved text (or `None`).
+
+Three roles, two verbs:
+
+- `monologue` and `notification` — the LLM **adopts** the character.
+  Each provider's `preamble.md` / `notification.md` accepts a
+  `{persona}` placeholder, slotted in via `safe_format`. Pass
+  `persona=self.persona(role) or ""` so a `None` value coerces to
+  empty rather than stringifying.
+- `main` — the summariser **preserves** an existing voice. Implemented
+  as a runtime *append* to the summariser system prompt inside
+  `reformat_text()`, not a template placeholder. When
+  `self.persona("main")` is `None` (the default), nothing is appended
+  and behaviour is byte-identical to before personas existed.
+
+The asymmetry is intentional: `summary.md` files are persona-neutral
+by design and a placeholder there would risk drifting from
+byte-identical defaults. Appending only on opt-in does not.
+
+Backward compatibility falls out of `safe_format`: a user with their
+own `prompts.local/<provider>/preamble.md` that doesn't include
+`{persona}` keeps working untouched — the extra kwarg is silently
+ignored. And anyone who hasn't customised anything gets byte-identical
+output because the persona defaults load Marvin's deduplicated
+paragraph back into the same slot.
+
+Known foot-gun, documented not fixed: OpenAI users who change the
+persona but leave `voices.openai.<role>.instructions` at the default
+get a non-Marvin **prompt** delivered in Marvin's **voice** (the TTS
+`instructions` field is a separate surface from the LLM prompt and
+drifts independently). Mentioned in `prompts/openai/preamble.md` and
+`personas/README.md`.
 
 ## Things to be careful about when editing
 

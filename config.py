@@ -21,6 +21,7 @@ ENV_FILE = PROJECT_DIR / ".env"
 DEFAULT_LLM_MODEL = "mistral/mistral-small-latest"
 DEFAULT_TTS_PROVIDER = "mistral"
 DEFAULT_FEATURES = {"monologue": True, "main": True, "notification": True}
+DEFAULT_PERSONAS = {"monologue": "marvin", "notification": "marvin", "main": None}
 DEFAULT_NOTIFICATION_LANGUAGES = [
     ("English", 1),
     ("German (Deutsch)", 5),
@@ -110,6 +111,22 @@ def features() -> dict[str, bool]:
         log(f"<features> expected object, got {type(raw).__name__}")
         raw = {}
     return {k: bool(raw.get(k, default)) for k, default in DEFAULT_FEATURES.items()}
+
+
+def personas() -> dict[str, str | None]:
+    raw = load_config().get("personas") or {}
+    if not isinstance(raw, dict):
+        log(f"<personas> expected object, got {type(raw).__name__}")
+        raw = {}
+    resolved: dict[str, str | None] = {}
+    for role, default in DEFAULT_PERSONAS.items():
+        value = raw.get(role, default)
+        if value is None or (isinstance(value, str) and value.strip()):
+            resolved[role] = value if value is None else value.strip()
+        else:
+            log(f"<personas> {role!r} expected non-empty string or null, got {value!r}; using default")
+            resolved[role] = default
+    return resolved
 
 
 def notification_languages() -> list[tuple[str, int]]:

@@ -6,6 +6,12 @@
     "main": true,
     "notification": true
   },
+  "personas": {
+    "_note": "Character voices for each role. Each value is resolved by looking up personas.local/<value>.md → personas/<value>.md → otherwise used verbatim as a freeform description (e.g. \"a wildly excited pantomime dame\"). Defaults: monologue and notification = \"marvin\"; main = null (no override). When main is set, the summariser is asked to preserve a beat of that voice when compressing the reply.",
+    "monologue": "marvin",
+    "notification": "marvin",
+    "main": null
+  },
   "notification_languages": [
     ["English", 1],
     ["German (Deutsch)", 5],

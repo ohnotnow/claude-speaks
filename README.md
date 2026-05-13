@@ -528,9 +528,58 @@ skips the step.
 
 ## Customising the personality
 
-The Marvin shtick is the default, not the law. Each provider's prompts
-live as plain markdown files under `prompts/<provider>/` and are
-overrideable per-user without forking the project.
+The Marvin shtick is the default, not the law. There are two layers
+of customisation, lightest first.
+
+### Swap the persona (one config line)
+
+The character that speaks the monologue and the idle quip is set in
+`config.json` under `personas`:
+
+```json
+"personas": {
+  "monologue": "marvin",
+  "notification": "marvin",
+  "main": null
+}
+```
+
+Each value resolves like this: if `personas[.local]/<value>.md` exists,
+that file's contents are used as the character description; otherwise
+the value is passed straight through as a freeform description. So
+both of these work:
+
+```json
+"personas": {
+  "monologue": "panto-dame",                       // loads personas.local/panto-dame.md
+  "notification": "a film noir detective, voice like cold whisky"   // used verbatim
+}
+```
+
+Drop new persona files in `personas.local/` (gitignored, survives
+`git pull`) — see [personas/README.md](personas/README.md) for the
+file format. The shipped `personas/marvin.md` is the source of truth
+for the Marvin character; nine other prompt files used to repeat it
+and now don't.
+
+`personas.main` controls a third, subtler thing: when set, the
+summariser is asked to **preserve** a beat of that voice when
+compressing Claude's actual reply (handy if the upstream agent is
+already writing in a specific character and you don't want the
+summariser to flatten it). Defaults to `null` — no change to today's
+behaviour.
+
+> **OpenAI users:** the TTS-level `voices.openai.<role>.instructions`
+> field shapes the *spoken delivery* separately from the LLM prompt.
+> Changing the persona without also updating those instructions gets
+> you a panto dame's words delivered in Marvin's weary voice.
+
+### Override the prompts themselves (heavier)
+
+If swapping the persona isn't enough — say you want to change *what*
+the model is asked to do, not just *who's* doing it — the provider
+prompts live as plain markdown files under `prompts/<provider>/` and
+are overrideable per-user without forking the project.
 
 ### The directory layout
 

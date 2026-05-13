@@ -8,3 +8,4 @@ config.json
 *.mp3
 .ant/
 prompts.local/
+personas.local/
