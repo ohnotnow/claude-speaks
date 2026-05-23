@@ -64,6 +64,8 @@
     "port": 8765
   },
   "gap_file": "0_75s",
+  "player_command": "afplay",
+  "fallback_sound": "/System/Library/Sounds/Funk.aiff",
   "word_replacements": {
     "vite": "veet",
     "nginx": "engine-ex",

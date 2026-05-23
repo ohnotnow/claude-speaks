@@ -18,7 +18,8 @@ AUDIO_KEEP = 10
 GAPS_DIR = PROJECT_DIR / "gaps"
 DEFAULT_GAP = "0_75s"
 
-FALLBACK_SOUND = Path("/System/Library/Sounds/Funk.aiff")
+DEFAULT_PLAYER = "afplay"
+DEFAULT_FALLBACK_SOUND = Path("/System/Library/Sounds/Funk.aiff")
 
 
 def load_word_replacements() -> dict[str, str]:
@@ -49,21 +50,50 @@ def gap_blob() -> bytes:
         return b""
 
 
-def play_fallback_sound() -> None:
-    """Last-resort audible heads-up when every TTS path has fallen over."""
-    if not FALLBACK_SOUND.is_file():
-        log(f"<fallback sound missing> {FALLBACK_SOUND}")
-        return
+def player_argv() -> list[str]:
+    """Audio player command from config, parsed to an argv list. Default: afplay."""
+    raw = load_config().get("player_command")
+    if raw is None or raw == "":
+        return [DEFAULT_PLAYER]
+    if isinstance(raw, list):
+        argv = [str(x) for x in raw if str(x).strip()]
+        return argv or [DEFAULT_PLAYER]
+    try:
+        argv = shlex.split(str(raw))
+    except ValueError as exc:
+        log(f"<player command> bad command {raw!r}: {exc!r}; using {DEFAULT_PLAYER}")
+        return [DEFAULT_PLAYER]
+    return argv or [DEFAULT_PLAYER]
+
+
+def fallback_sound_path() -> Path:
+    """Last-resort audible heads-up file. Overridable via config `fallback_sound`."""
+    raw = load_config().get("fallback_sound")
+    return Path(str(raw)) if raw else DEFAULT_FALLBACK_SOUND
+
+
+def play_audio_file(path: Path) -> None:
+    """Play a single audio file via the configured player, detached."""
+    argv = player_argv() + [str(path)]
     try:
         subprocess.Popen(
-            ["afplay", str(FALLBACK_SOUND)],
+            argv,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
     except Exception as exc:
-        log(f"<fallback sound error> {exc!r}")
+        log(f"<player error> {exc!r} argv={argv}")
+
+
+def play_fallback_sound() -> None:
+    """Last-resort audible heads-up when every TTS path has fallen over."""
+    sound = fallback_sound_path()
+    if not sound.is_file():
+        log(f"<fallback sound missing> {sound}")
+        return
+    play_audio_file(sound)
 
 
 def rotate_audio_archive() -> None:
@@ -91,7 +121,7 @@ def _safe_synthesise(provider: Provider, clip: Clip) -> bytes | None:
 
 
 def play_clips(clips: list[Clip], provider: Provider) -> None:
-    """Synthesise each clip in parallel, stitch with a silent gap, play via afplay."""
+    """Synthesise each clip in parallel, stitch with a silent gap, play via the configured player."""
     if not clips:
         return
 
@@ -125,10 +155,4 @@ def play_clips(clips: list[Clip], provider: Provider) -> None:
 
     rotate_audio_archive()
 
-    subprocess.Popen(
-        ["sh", "-c", f"afplay {shlex.quote(str(combined_mp3))}"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    play_audio_file(combined_mp3)

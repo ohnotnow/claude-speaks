@@ -46,7 +46,7 @@ the reply, so silent failures are audible rather than mysterious.
 
 ## Requirements
 
-- macOS (uses `afplay` for playback)
+- macOS (uses `afplay` for playback by default; override via `player_command` in `config.json` if you're on something else)
 - Python 3.14+
 - [uv](https://docs.astral.sh/uv/)
 - An API key for whichever TTS provider you've configured (Mistral and xAI
@@ -134,6 +134,49 @@ never sees a TTS response.
 
    It logs to the same `stop-hook.log` as the local hook, tagged with
    `<server ...>`.
+
+#### Running it as a service
+
+Running `uv run server.py` in a terminal works fine, but is a faff if
+you want the server up across reboots. The repo ships example service
+files for both platforms — they need a couple of path edits before
+they'll work, so read the comments at the top of each file before
+loading it.
+
+**macOS (launchd LaunchAgent):**
+
+```bash
+# Edit the two YOUR_USER placeholders and project path inside the plist first.
+cp scripts/com.claude-speaks.server.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-speaks.server.plist
+```
+
+It's a LaunchAgent (per-user) rather than a LaunchDaemon — daemons run
+before login and don't have access to your audio session, so `afplay`
+would produce silence. Reload after editing with
+`launchctl kickstart -k gui/$(id -u)/com.claude-speaks.server`; stop
+with `launchctl bootout gui/$(id -u)/com.claude-speaks.server`.
+
+**Linux (systemd user unit):**
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp scripts/claude-speaks-server.service ~/.config/systemd/user/
+# Edit the %h-relative paths inside the file.
+systemctl --user daemon-reload
+systemctl --user enable --now claude-speaks-server.service
+```
+
+It's a user unit, not a system one, for the same reason — the system
+PID-1 has no PulseAudio / PipeWire session to play into. If you want
+the server to keep running while you're logged out, `loginctl
+enable-linger "$USER"`. Logs land in the journal:
+`journalctl --user -u claude-speaks-server -f`.
+
+Heads up for Linux: the default `player_command` is `afplay`, which
+isn't on Linux. Set `player_command` (and likely `fallback_sound`) in
+`config.json` before the unit will actually produce noise — see the
+[Configuration](#configuration) table.
 
 ### On the Pi (client side)
 
@@ -314,6 +357,8 @@ whichever speech backend you fancy. They don't have to share a vendor.
 | `word_replacements` | `{}` | Phonetic swap map — see [Word replacements](#word-replacements). |
 | `features` | all `true` | Per-stage toggles — see [Features](#features). |
 | `notification_languages` | seven-language weighted list (see below) | Which languages the idle quip can be generated in, and how often. See [Customising the personality](#customising-the-personality). |
+| `player_command` | `afplay` | Command used to play the stitched mp3. Accepts a string (shlex-split) or an argv list. Set to e.g. `"mpg123 -q"` or `"ffplay -nodisp -autoexit -loglevel quiet"` on Linux. The file path is appended as the last argument. |
+| `fallback_sound` | `/System/Library/Sounds/Funk.aiff` | Sound played when every TTS path fails. Must be a format your `player_command` understands — swap to an mp3 if you've replaced `afplay`. |
 
 ### Voices
 
@@ -664,7 +709,9 @@ relevant LLM call (and clip) entirely. See [Features](#features).
 
 If Claude finishes a turn while you're in a Teams call (or otherwise need
 silence in a hurry), `killall afplay` stops playback dead. Bind it to a
-hotkey and you've got a panic button.
+hotkey and you've got a panic button. (If you've changed `player_command`
+to something other than `afplay`, swap the binary name in the commands
+and scripts below to match.)
 
 A ready-made script lives at `scripts/shut-marvin-up.sh`. Pick whichever of
 the three options below suits your setup.
@@ -710,7 +757,7 @@ Reload the config and the chord is live.
 - Markdown stripping is regex-based and unsubtle.
 - The hook blocks for roughly 2–3 seconds while the classifier and TTS
   calls complete. Playback itself is detached and non-blocking.
-- macOS-only, because of `afplay`.
+- macOS-by-default, because `afplay` is the assumed player. Set `player_command` in `config.json` to point at a different binary (e.g. `mpg123`, `ffplay`) to run elsewhere — you'll also want to override `fallback_sound` since the default points at a macOS system aiff.
 - No way to interrupt Jane mid-sentence from inside Claude Code itself —
   see [Shutting Marvin up mid-sentence](#shutting-marvin-up-mid-sentence)
   for the hotkey options.

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchAgent for claude-speaks/server.py on macOS.
+
+  Replace the two YOUR_USER placeholders and the path-to-claude-speaks
+  fragment with your real values, then install with:
+
+      cp scripts/com.claude-speaks.server.plist ~/Library/LaunchAgents/
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-speaks.server.plist
+
+  Stop / unload:
+
+      launchctl bootout gui/$(id -u)/com.claude-speaks.server
+
+  Reload after editing:
+
+      launchctl kickstart -k gui/$(id -u)/com.claude-speaks.server
+
+  This is a LaunchAgent (per-user), not a LaunchDaemon — agents have
+  access to your audio session, daemons do not. afplay would be silent
+  as a daemon.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude-speaks.server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USER/.local/bin/uv</string>
+        <string>run</string>
+        <string>--project</string>
+        <string>/Users/YOUR_USER/path/to/claude-speaks</string>
+        <string>server.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/YOUR_USER/path/to/claude-speaks</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USER/path/to/claude-speaks/server.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USER/path/to/claude-speaks/server.err.log</string>
+</dict>
+</plist>

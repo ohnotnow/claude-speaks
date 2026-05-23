@@ -1,0 +1,45 @@
+# systemd user unit for claude-speaks/server.py on Linux.
+#
+# This is a *user* unit, not a system one — it needs access to your
+# desktop audio session (PulseAudio / PipeWire), which only exists for
+# a logged-in user. A system-level unit would have no speakers to play
+# through.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/claude-speaks-server.service ~/.config/systemd/user/
+#   # edit the file: set the two %h-relative paths to where you cloned
+#   # the repo, and confirm `uv` is at ~/.local/bin/uv (or substitute).
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now claude-speaks-server.service
+#
+# To survive logout (so the server keeps running when you SSH out):
+#   loginctl enable-linger "$USER"
+#
+# Status / logs / restart:
+#   systemctl --user status claude-speaks-server
+#   journalctl --user -u claude-speaks-server -f
+#   systemctl --user restart claude-speaks-server
+#
+# Stop / disable:
+#   systemctl --user disable --now claude-speaks-server.service
+#
+# Note: claude-speaks ships assuming `afplay` (macOS) for playback.
+# On Linux you'll want to set `player_command` (and probably
+# `fallback_sound`) in config.json — e.g. "mpg123 -q" plus a sound
+# file you have locally. See the README.
+
+[Unit]
+Description=claude-speaks remote audio server
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/path/to/claude-speaks
+ExecStart=%h/.local/bin/uv run --project %h/path/to/claude-speaks server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
