@@ -26,6 +26,6 @@ class LLM:
             model=self.model,
             messages=messages,
             max_tokens=max_tokens,
-            temperature=temperature,
+            # temperature=temperature, # commented out as some providers (and some specific models for a provider) don't support this
         )
         return (response.choices[0].message.content or "").strip()

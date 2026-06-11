@@ -74,7 +74,7 @@ class OpenAIProvider(Provider):
                     f"\n\nThe reply you are about to compress is written in the voice of: {persona}. "
                     "Preserve a beat that captures that voice."
                 )
-            rewritten = self.llm.complete(system_prompt, text, max_tokens=400, temperature=0.3)
+            rewritten = self.llm.complete(system_prompt, text, max_tokens=400)
             rewritten = rewritten.strip('"').strip("'").strip()
             if not rewritten:
                 return text, None
@@ -94,7 +94,7 @@ class OpenAIProvider(Provider):
                 self.prompt("preamble"),
                 persona=self.persona("monologue") or "",
             )
-            line = self.llm.complete(system_prompt, text, max_tokens=40, temperature=1.0)
+            line = self.llm.complete(system_prompt, text, max_tokens=40)
             line = line.strip('"').strip("'").rstrip(".,!?;:").strip()
             if not line:
                 log("<preamble gen> model returned empty content")
@@ -162,7 +162,7 @@ class OpenAIProvider(Provider):
             persona=self.persona("notification") or "",
         )
         try:
-            line = self.llm.complete(prompt, "", max_tokens=60, temperature=1.0)
+            line = self.llm.complete(prompt, "", max_tokens=60)
             line = line.strip('"').strip("'").strip()
         except Exception as exc:
             log(f"<notification gen error> {exc!r}")
