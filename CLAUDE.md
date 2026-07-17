@@ -229,7 +229,7 @@ loaded. Both missing → `FileNotFoundError` (install is broken).
 provider, getting a system prompt looks like:
 
 ```python
-self.llm.complete(self.prompt("summary"), user_text, max_tokens=400)
+self.llm.complete(self.prompt("summary"), user_text, max_tokens=16000)
 ```
 
 Two consequences worth holding in mind:
@@ -316,10 +316,25 @@ drifts independently). Mentioned in `prompts/openai/preamble.md` and
 - The "always return a complete grammatical phrase, never stop mid-sentence
   to meet a word count" guidance in the prompts is deliberate. The user
   has noticed truncated lines before and asked for this.
-- `MAX_SPEAK_CHARS = 800` (in `text_util.py`) is the safety net after the
-  summariser. The summariser usually keeps things well under it; the cap
-  is for when the summariser fails or is skipped. Each provider applies
-  it inside `plan_stop_clips` via `cap_length(...)`.
+- `MAX_SPEAK_CHARS = 800` (in `text_util.py`) is the safety net on
+  *every* clip sent to TTS — main, preamble, and notification. It is
+  the only thing bounding TTS spend: the LLM `max_tokens` budgets are
+  deliberately huge (16000 summariser / 4000 elsewhere) because
+  reasoning models spend from that budget on hidden reasoning before
+  emitting text — small budgets caused systematic summariser failures
+  on long replies, and the raw reply got spoken instead. Each provider
+  applies `cap_length(...)` to every clip it builds; keep that when
+  adding clips.
+- The preamble clip is tighter: `cap_length(..., MAX_MONOLOGUE_CHARS)`
+  (200 chars), and the preamble LLM output goes through `first_line()`
+  before the strip chain. gpt-5.x occasionally *answers the reply*
+  instead of writing the one-line quip — both observed cases were
+  triggered by a reply ending in a direct question to the user, and the
+  babble is always multi-line with a usable quip as its first line.
+  (Mistral models followed "up to 10 words" to the letter, which is why
+  this never surfaced before the model switch.) When the guard fires it
+  logs `<preamble guard>`; keep that log line — it's the only evidence
+  the slip happened.
 - New TTS providers go in `providers/<name>.py` *and* a matching
   `prompts/<name>/` directory of default prompts. See
   `providers/README.md` for the contract, the worked examples, and the

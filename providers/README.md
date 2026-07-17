@@ -48,6 +48,14 @@ don't emit the preamble clip; if `main` is off, skip the summariser (and any
 classifier) and don't emit the main clip. Don't pay for an LLM call whose
 output you'll throw away.
 
+Cap every clip you build with `cap_length(...)` from `text_util` — it is
+the only thing bounding TTS spend. The preamble clip takes the tighter
+`cap_length(..., MAX_MONOLOGUE_CHARS)`, and the preamble LLM output should
+go through `first_line(...)` first: some models occasionally answer the
+reply they were shown instead of writing the one-line quip (especially
+when the reply ends with a question), and the guard stops that babble
+reaching TTS. Copy the pattern from `xai.py`'s `marvinise`.
+
 `plan_notification_clip() -> Clip | None` — Claude has gone idle or is
 waiting for permission. Return a single `Clip` for the spoken nag, or
 `None` to play the system fallback sound. The project-level
@@ -90,7 +98,7 @@ prompts/<your_name>/
 Inside your provider, ask for one by name:
 
 ```python
-text = self.llm.complete(self.prompt("summary"), user_text, max_tokens=400)
+text = self.llm.complete(self.prompt("summary"), user_text, max_tokens=16000)
 ```
 
 `self.prompt(name)` is provided by `Provider` and routes through

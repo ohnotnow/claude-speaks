@@ -30,7 +30,7 @@ from config import notification_languages
 from history import load_notification_history
 from logging_util import log
 from prompts import safe_format
-from text_util import SUMMARY_WORD_THRESHOLD, cap_length
+from text_util import MAX_MONOLOGUE_CHARS, SUMMARY_WORD_THRESHOLD, cap_length, first_line
 
 from .base import Clip, Provider
 
@@ -74,7 +74,7 @@ class OpenAIProvider(Provider):
                     f"\n\nThe reply you are about to compress is written in the voice of: {persona}. "
                     "Preserve a beat that captures that voice."
                 )
-            rewritten = self.llm.complete(system_prompt, text, max_tokens=400)
+            rewritten = self.llm.complete(system_prompt, text, max_tokens=16000)
             rewritten = rewritten.strip('"').strip("'").strip()
             if not rewritten:
                 return text, None
@@ -94,7 +94,10 @@ class OpenAIProvider(Provider):
                 self.prompt("preamble"),
                 persona=self.persona("monologue") or "",
             )
-            line = self.llm.complete(system_prompt, text, max_tokens=40)
+            raw = self.llm.complete(system_prompt, text, max_tokens=4000)
+            line = first_line(raw)
+            if line != raw.strip():
+                log(f"<preamble guard> multi-line output; kept first line ({len(line)} of {len(raw.strip())} chars)")
             line = line.strip('"').strip("'").rstrip(".,!?;:").strip()
             if not line:
                 log("<preamble gen> model returned empty content")
@@ -137,7 +140,7 @@ class OpenAIProvider(Provider):
         clips: list[Clip] = []
         if want_monologue and preamble:
             clips.append(Clip(
-                f"{preamble} ...",
+                cap_length(f"{preamble} ...", MAX_MONOLOGUE_CHARS),
                 monologue_voice,
                 instructions=self.instructions_for("monologue"),
             ))
@@ -162,7 +165,7 @@ class OpenAIProvider(Provider):
             persona=self.persona("notification") or "",
         )
         try:
-            line = self.llm.complete(prompt, "", max_tokens=60)
+            line = self.llm.complete(prompt, "", max_tokens=4000)
             line = line.strip('"').strip("'").strip()
         except Exception as exc:
             log(f"<notification gen error> {exc!r}")
@@ -171,7 +174,7 @@ class OpenAIProvider(Provider):
             return None
         log(f"<notification> {line}")
         return Clip(
-            line,
+            cap_length(line),
             self.voice_for("notification"),
             instructions=self.instructions_for("notification"),
         )

@@ -16,7 +16,11 @@ class LLM:
         system: str,
         user: str,
         *,
-        max_tokens: int = 400,
+        # Reasoning models (e.g. gpt-5.x) spend from this budget on hidden
+        # reasoning before emitting any text — too small and the call errors
+        # with "max_tokens ... reached". Spoken length is bounded by the
+        # prompts and cap_length, not by this.
+        max_tokens: int = 16000,
         temperature: float = 0.3,
     ) -> str:
         messages = [{"role": "system", "content": system}]

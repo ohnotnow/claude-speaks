@@ -25,7 +25,7 @@ from config import notification_languages
 from history import load_notification_history
 from logging_util import log
 from prompts import safe_format
-from text_util import cap_length
+from text_util import MAX_MONOLOGUE_CHARS, cap_length, first_line
 
 from .base import Clip, Provider
 
@@ -51,7 +51,7 @@ class ElevenLabsProvider(Provider):
                     f"\n\nThe reply you are about to compress is written in the voice of: {persona}. "
                     "Preserve a beat that captures that voice."
                 )
-            rewritten = self.llm.complete(system_prompt, text, max_tokens=400, temperature=0.3)
+            rewritten = self.llm.complete(system_prompt, text, max_tokens=16000, temperature=0.3)
             rewritten = rewritten.strip('"').strip("'").strip()
             if not rewritten:
                 return text, None
@@ -71,7 +71,10 @@ class ElevenLabsProvider(Provider):
                 self.prompt("preamble"),
                 persona=self.persona("monologue") or "",
             )
-            line = self.llm.complete(system_prompt, text, max_tokens=40, temperature=1.0)
+            raw = self.llm.complete(system_prompt, text, max_tokens=4000, temperature=1.0)
+            line = first_line(raw)
+            if line != raw.strip():
+                log(f"<preamble guard> multi-line output; kept first line ({len(line)} of {len(raw.strip())} chars)")
             line = line.strip('"').strip("'").rstrip(".,!?;:").strip()
             if not line:
                 log("<preamble gen> model returned empty content")
@@ -113,7 +116,7 @@ class ElevenLabsProvider(Provider):
 
         clips: list[Clip] = []
         if want_monologue and preamble:
-            clips.append(Clip(f"{preamble} ...", monologue_voice))
+            clips.append(Clip(cap_length(f"{preamble} ...", MAX_MONOLOGUE_CHARS), monologue_voice))
         if want_main:
             clips.append(Clip(cap_length(summary), main_voice))
         return clips
@@ -131,7 +134,7 @@ class ElevenLabsProvider(Provider):
             persona=self.persona("notification") or "",
         )
         try:
-            line = self.llm.complete(prompt, "", max_tokens=60, temperature=1.0)
+            line = self.llm.complete(prompt, "", max_tokens=4000, temperature=1.0)
             line = line.strip('"').strip("'").strip()
         except Exception as exc:
             log(f"<notification gen error> {exc!r}")
@@ -139,7 +142,7 @@ class ElevenLabsProvider(Provider):
         if not line:
             return None
         log(f"<notification> {line}")
-        return Clip(line, self.voice_for("notification"))
+        return Clip(cap_length(line), self.voice_for("notification"))
 
     def synthesise(self, clip: Clip) -> bytes | None:
         model_id = self.settings.get("model_id", DEFAULT_MODEL_ID)
