@@ -10,7 +10,7 @@ After the provider-pluggable refactor:
 
 ```
 main.py            ~85 lines  thin entry point: stdin → provider → audio
-llm.py             ~30 lines  LLM(model).complete(system, user) — wraps litellm
+llm.py            ~100 lines  LLM(model).complete(system, user) — litellm, or Agent SDK for anthropic/ + OAuth token
 audio.py          ~135 lines  stitch + play, archive rotation, word replacements
 config.py         ~110 lines  load_config, load_env_file, classifier_model, tts_provider, features, personas, notification_languages
 logging_util.py    ~35 lines  log, trim_log, LOG_FILE, PROJECT_DIR
@@ -41,7 +41,9 @@ personas.local/               gitignored; user persona files drop in here (flat,
 ```
 
 - Python 3.14, dependencies managed via `uv` (`pyproject.toml`, `uv.lock`).
-  Run with `uv run main.py`. Only third-party dep is `litellm`.
+  Run with `uv run main.py`. Third-party deps: `litellm`, `elevenlabs`,
+  `claude-agent-sdk` (the last imported lazily — only anthropic/ +
+  OAuth-token users pay its startup cost).
 - Invoked by Claude Code as a hook — reads a JSON payload on stdin, returns
   nothing meaningful on stdout. The user wires it up in
   `~/.claude/settings.json` for two events: `Stop` and `Notification`.
@@ -226,6 +228,64 @@ that ignore the field still work.
 - **Do not touch the dotfile yourself.** The user has been burned by
   leaked secrets. If you need a new env var documented, edit
   `dotenv.example` (or similar) and ask the user to copy values across.
+
+## Claude subscription billing via the Agent SDK
+
+`llm.py` has a second completion path: when the model starts with
+`anthropic/` *and* `CLAUDE_CODE_OAUTH_TOKEN` is set (from
+`claude setup-token`), `complete()` routes through the Claude Agent SDK
+(`claude-agent-sdk`) instead of litellm, billing the user's Claude
+subscription rather than API credit. `wants_agent_sdk(model)` is the
+fork; non-anthropic models and API-key-only setups are byte-identical
+to before.
+
+Facts verified against SDK 0.2.123 source, not docs-from-memory:
+
+- **Credential precedence is the whole game.** Claude Code checks
+  `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` *before* the OAuth
+  token, so both-set means silent API billing. `llm.auth_conflict()`
+  detects this and `main.process_payload` refuses the event — logs
+  `<auth guard>`, plays the fallback sound, returns. The guard lives in
+  `process_payload` (not `main()`) so the `server.py` HTTP path is
+  covered too, and *inside* the `config_overlay` block because a
+  per-request overlay can switch `llm_model`. Deliberate scoping: it
+  only trips when the model is `anthropic/` — both vars set while
+  running a Mistral LLM is harmless.
+- **`setting_sources=[]` is load-bearing.** The SDK default (`None`)
+  loads *all* filesystem settings including `~/.claude/settings.json` —
+  which contains the Stop hook that runs this very code. Recursion.
+  Verified empirically that `[]` prevents the inner session firing the
+  hook (no log entries from the inner turn). The SDK also strips
+  `CLAUDECODE` from the child env itself, so nested-inside-a-session is
+  handled upstream.
+- **litellm calls `load_dotenv()` at import** (`litellm/__init__.py`),
+  re-reading `.env` from CWD. Any "pop the key from `os.environ`, then
+  proceed" reasoning breaks if the pop happens before litellm's import.
+  This bit a test harness here; the production guard is unaffected
+  because it never pops — it refuses.
+- The SDK subprocess env is `os.environ` merged with
+  `ClaudeAgentOptions.env` on top, so overrides *are* possible that
+  way — unused here because the guard makes them unnecessary.
+- Empty user turns: litellm's `modify_params` inserts `"."` as the
+  placeholder user message for system-only anthropic calls; the SDK
+  path mirrors that (`prompt=user or "."`).
+- **`thinking={"type": "disabled"}` is load-bearing for latency.** The
+  SDK defaults to adaptive thinking at high effort, which had Haiku
+  spending 22-55s of hidden reasoning per 40-word summary (the log's
+  `<agent sdk>` timing lines showed api_ms ≈ wall_ms, no retries — it
+  really was all thinking). Disabled: ~2-3s per call, parallel calls
+  fine. Diagnosed the hard way: it masqueraded first as CLI boot cost,
+  then as per-account concurrency throttling (a serialising lock was
+  added and reverted — the "tiny probe fast, real prompt slow" split
+  was thinking depth tracking task difficulty, not queueing).
+- Every SDK call logs `<agent sdk> ... api_ms= cli_ms= wall_ms=`:
+  api_ms is time inside Anthropic's API, wall_ms - cli_ms ≈ CLI boot
+  (~1.5-2s). If subscription turns get slow again, read those three
+  numbers before theorising.
+- Model self-reports are not evidence: the inner model cheerfully
+  claimed it could see "memory files and project settings" when it
+  couldn't (the log proved no settings loaded). Verify isolation via
+  the log, not by asking the model.
 
 ## Markdown stripping is regex-based and crude
 

@@ -347,6 +347,29 @@ whichever speech backend you fancy. They don't have to share a vendor.
 | `MISTRAL_API_KEY` | — | Required when `tts_provider` is `mistral`. Also used for the LLM calls if `llm_model` points at a Mistral model. |
 | `XAI_API_KEY` | — | Required when `tts_provider` is `xai`. |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. | — | Only needed if `llm_model` points at that provider. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | Alternative to `ANTHROPIC_API_KEY` for `anthropic/...` models: bills your Claude subscription instead of API credit. See [Using your Claude subscription](#using-your-claude-subscription). |
+
+### Using your Claude subscription
+
+If `llm_model` is an `anthropic/...` model, you can pay for the LLM calls
+with your Claude subscription rather than API credit. Run
+`claude setup-token`, put the resulting token in `.env` as
+`CLAUDE_CODE_OAUTH_TOKEN`, and the hook routes those calls through the
+[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview)
+instead of LiteLLM. (Anthropic permit this for personal, non-commercial
+use — a hook that makes Marvin sigh at you qualifies comfortably.)
+
+Set the token *or* `ANTHROPIC_API_KEY` — not both. Claude Code's
+credential precedence puts the API key above the token, so with both set
+every call would quietly bill your API account. Rather than let that
+happen, the hook refuses to run the event: it logs `<auth guard>` and
+plays the fallback sound. If you hear the Funk and see that log line,
+remove one of the two from `.env` (and check your shell isn't exporting
+`ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` globally either — the
+guard looks at the whole environment, because that's what gets billed).
+
+One trade-off: each SDK call boots the Claude Code CLI rather than making
+a single HTTP request, which adds a few seconds of latency per turn.
 
 `config.json`:
 

@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "claude-agent-sdk>=0.2.123",
     "elevenlabs>=2.45.0",
     "litellm>=1.83.8",
 ]

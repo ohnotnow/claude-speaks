@@ -22,7 +22,7 @@ from config import (
     tts_provider,
 )
 from history import append_notification_history
-from llm import LLM
+from llm import LLM, auth_conflict
 from logging_util import log, trim_log
 from providers import PROVIDERS
 from text_util import strip_markdown
@@ -71,6 +71,16 @@ def process_payload(payload: dict) -> None:
         log(f"<config overrides> {overrides}")
 
     with config_overlay(overrides):
+        conflict = auth_conflict(classifier_model())
+        if conflict:
+            log(
+                f"<auth guard> {conflict} and CLAUDE_CODE_OAUTH_TOKEN are both set; "
+                f"{conflict} outranks the OAuth token and would bill your API account. "
+                "Remove one of them. Skipping this event."
+            )
+            play_fallback_sound()
+            return
+
         name = tts_provider()
         cls = PROVIDERS.get(name)
         if cls is None:

@@ -26,6 +26,19 @@ OPENAI_API_KEY=
 # (MISTRAL_API_KEY above doubles as the LLM key when llm_model is a
 # Mistral model — no need to repeat it.)
 
+# ─── Claude subscription instead of API credit ───────────────────────
+# Alternative to ANTHROPIC_API_KEY for anthropic/... models. Generate a
+# token with `claude setup-token`; when it's set, LLM calls go through the
+# Claude Agent SDK and bill your Claude subscription. Fine for personal,
+# non-commercial use per Anthropic's terms — which this hook is.
+#
+# Set this OR ANTHROPIC_API_KEY, not both. Claude Code's credential
+# precedence puts the API key above this token, so with both set your API
+# account gets billed silently. The hook guards against that: it logs
+# <auth guard> and plays the fallback sound instead of running the event.
+
+CLAUDE_CODE_OAUTH_TOKEN=
+
 # ─── Remote-mode shared secret ───────────────────────────────────────
 # Only needed if you run `uv run server.py` on this Mac and have another
 # machine (e.g. a Raspberry Pi) POST hook payloads to it. Pick something
