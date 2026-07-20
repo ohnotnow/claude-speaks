@@ -102,6 +102,35 @@ Then wire it up as a Stop hook in your Claude Code settings
 
 Restart your Claude Code session and Claude should start speaking back.
 
+### Running the hook in the background
+
+Claude Code normally waits for a hook to finish before handing the
+session back to you — and this hook does real work (LLM calls, then TTS
+synthesis) before it returns. With a fast cloud provider that's a
+tolerable 2–3 seconds; with Kokoro synthesising locally the wait can
+stretch long enough to be properly annoying if you're at the keyboard
+rather than the kettle. Adding `"async": true` to the hook definition
+tells Claude Code to fire the hook and move on:
+
+```json
+{
+  "type": "command",
+  "command": "uv run --project /path/to/claude-speaks /path/to/claude-speaks/main.py",
+  "async": true
+}
+```
+
+You get your prompt back instantly and the audio arrives when it's
+ready. Strongly recommended for Kokoro; a pleasant upgrade for the
+cloud providers too.
+
+One gotcha: the blocking behaviour was quietly acting as a queue. With
+`async` on, nothing stops a quick follow-up turn kicking off a second
+run while the first is still talking, so very occasionally you'll hear
+two streams of audio at once. The `killall afplay` panic button in
+[Shutting Marvin up mid-sentence](#shutting-marvin-up-mid-sentence)
+silences both in one keystroke.
+
 ## Remote mode (Raspberry Pi → Mac)
 
 If you run Claude Code on a headless box (a Raspberry Pi left ticking
@@ -503,7 +532,10 @@ your provider of choice is having a bad day. The trade-off is latency:
 each clip spawns a fresh CLI process that loads the 310 MB model before
 it says a word, so expect roughly 10–15 seconds from Claude finishing to
 audio starting (the cloud providers manage 2–5). Fine for the
-wander-off-and-make-coffee use case; annoying if you hover.
+wander-off-and-make-coffee use case; annoying if you hover. Either way,
+set `"async": true` on the hook so the wait happens in the background
+rather than blocking your session — see
+[Running the hook in the background](#running-the-hook-in-the-background).
 
 Setup:
 
@@ -868,7 +900,10 @@ Reload the config and the chord is live.
   voices may not have all nine `_<style>` variants.
 - Markdown stripping is regex-based and unsubtle.
 - The hook blocks for roughly 2–3 seconds while the classifier and TTS
-  calls complete. Playback itself is detached and non-blocking.
+  calls complete (noticeably longer on Kokoro). Playback itself is
+  detached and non-blocking, and `"async": true` in the hook config
+  removes the wait entirely — see
+  [Running the hook in the background](#running-the-hook-in-the-background).
 - macOS-by-default, because `afplay` is the assumed player. Set `player_command` in `config.json` to point at a different binary (e.g. `mpg123`, `ffplay`) to run elsewhere — you'll also want to override `fallback_sound` since the default points at a macOS system aiff.
 - No way to interrupt Jane mid-sentence from inside Claude Code itself —
   see [Shutting Marvin up mid-sentence](#shutting-marvin-up-mid-sentence)

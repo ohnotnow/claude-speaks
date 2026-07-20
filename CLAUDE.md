@@ -104,8 +104,11 @@ three parallel calls (classifier, preamble, summariser) via
 might run one, four, or none — that's its call. The clip TTS calls in
 `audio.play_clips` also run in parallel.
 
-Latency matters because Claude Code blocks on the hook returning. Prefer
-extending the existing executor over adding a serial step.
+Latency matters because Claude Code blocks on the hook returning —
+unless the user has set `"async": true` on the hook definition (see
+README → "Running the hook in the background"; the user runs it that
+way for Kokoro). Don't assume async: not every install will set it, so
+prefer extending the existing executor over adding a serial step.
 
 ## Voice resolution
 
