@@ -18,15 +18,21 @@ text_util.py       ~25 lines  strip_markdown, cap_length
 history.py         ~25 lines  notification-history.txt read/append
 prompts.py         ~75 lines  load_prompt(provider, name), load_persona(value) — local-first lookups + comment strip; safe_format
 providers/
-  base.py          ~60 lines  Provider abstract base + Clip dataclass + self.prompt() helper
+  base.py          ~75 lines  Provider abstract base + Clip dataclass + self.prompt() helper + gap_variant
   __init__.py      ~30 lines  auto-discovery via pkgutil.iter_modules
-  mistral.py      ~205 lines  full Mistral implementation
-  xai.py          ~165 lines  full xAI implementation
+  mistral.py      ~235 lines  full Mistral implementation
+  xai.py          ~195 lines  full xAI implementation
+  openai.py       ~255 lines  OpenAI TTS implementation
+  elevenlabs.py   ~170 lines  ElevenLabs implementation
+  kokoro.py       ~215 lines  local Kokoro (kokoro-tts CLI subprocess, no API key)
   README.md                   guide for adding a new provider
 prompts/
   README.md                   pointer file for end-users (override mechanism)
   mistral/                    classifier.md, summary.md, preamble.md, notification.md
   xai/                        summary.md, preamble.md, notification.md
+  openai/                     summary.md, preamble.md, notification.md
+  elevenlabs/                 summary.md, preamble.md, notification.md
+  kokoro/                     summary.md, preamble.md, notification.md (no {language} in notification — see below)
 prompts.local/                gitignored; user overrides drop in here with the same layout
 personas/
   README.md                   guide to the personas mechanism
@@ -74,6 +80,16 @@ The contract is in `providers/base.py`. Worked examples:
   classifier, the summariser embeds prosody tags (`<soft>`, `<emphasis>`,
   `<slow>`) directly. Two parallel LLM calls. Summariser runs every time.
   Uses base-class `voice_for`.
+- `providers/kokoro.py` — **local-CLI style**: `api_key_env = None`,
+  `synthesise` shells out to the `kokoro-tts` binary (temp dir in, mp3
+  bytes out). No tags, no classifier; summariser is threshold-gated like
+  Mistral's. Its mp3s are 24 kHz, so it sets `gap_variant = "24k"` (see
+  the sample-rate section). ~13s wall for a two-clip stop event — each
+  subprocess reloads the 310 MB onnx model, and since the hook is a fresh
+  process per turn, an in-process library would pay the same load anyway.
+  Model files (`kokoro-v1.0.onnx`, `voices-v1.0.bin`) live gitignored in
+  the project root; paths configurable via `provider_settings.kokoro`,
+  relative ones resolved against PROJECT_DIR, not CWD.
 
 When adding a new provider, see `providers/README.md` for the contract,
 the skeleton, and the gotchas.
@@ -101,9 +117,10 @@ Mistral overrides `voice_for` to append `_<style>` when role is `main` and
 style is non-neutral. xAI uses the base implementation untouched. Any
 provider with a quirky voice scheme overrides this method.
 
-`language_for(role)` is xAI-only in practice — Mistral's `synthesise`
+`language_for(role)` matters to xAI and Kokoro — Mistral's `synthesise`
 ignores `clip.language`. The base reads it from `voices_config[role].language`,
-defaulting to `"en"`.
+defaulting to `"en"`. Kokoro needs a concrete dialect, so it maps a bare
+`"en"` to `provider_settings.kokoro.language` (default `en-gb`).
 
 ## Audio stitching has a sample-rate landmine
 
@@ -117,12 +134,24 @@ This is now every provider author's responsibility, not an internal
 concern. The constraint is documented in `providers/README.md` and the
 xAI provider exposes `sample_rate` / `bit_rate` overrides via
 `provider_settings.xai` (see `config.example.json`). Any new provider
-must either match the gaps or replace the gap mp3s and document the
-new rate.
+must either match the gaps or ship variant gap files (below).
+
+For engines whose rate is fixed (Kokoro is always 24 kHz), the provider
+sets the `gap_variant` class attribute and `audio.gap_blob(provider)`
+stitches with `gaps/<gap_file>_<variant>.mp3` — the `*_24k.mp3` files
+exist for all three durations, ffmpeg-rendered at `r=24000`. If a
+variant file is missing, `gap_blob` returns `b""` (no gap) rather than
+a wrong-rate gap, because clips butting together beats silent
+truncation. User `gap_file` config still picks the duration; the
+variant only swaps the rate.
 
 Stitching itself is naive byte concatenation in `audio.play_clips`:
 `audio_parts[0] + gap + part2 + gap + part3 + ...`. No ffmpeg, no
 demuxing. That works only because the codec and sample rate match.
+One cosmetic trap: Kokoro's mp3s carry a Xing/LAME header, so `afinfo`
+reports a stitched file's duration as the *first clip only*. afplay
+ignores the header and plays everything — verified empirically; do not
+"fix" this.
 
 ## Error handling philosophy
 
@@ -253,7 +282,11 @@ can be generated in) is no longer a per-provider Python constant. It
 moved to `config.json` (read via `config.notification_languages()`),
 defaulting to the original seven-language list if the key is missing
 or malformed. To get English-only quips, the user sets
-`"notification_languages": [["English", 1]]`.
+`"notification_languages": [["English", 1]]`. Kokoro deliberately
+ignores this setting — its voices are single-language and phonemise
+other scripts into garbage — so its `notification.md` has no
+`{language}` placeholder and quips default to English (the prompt's
+comment block tells users how to change that).
 
 ## Personas
 

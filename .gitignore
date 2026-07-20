@@ -5,7 +5,9 @@
 stop-hook.log
 notification-history.txt
 config.json
-*.mp3
+/*.mp3
 .ant/
 prompts.local/
 personas.local/
+kokoro-v1.0.onnx
+voices-v1.0.bin

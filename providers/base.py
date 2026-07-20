@@ -22,6 +22,9 @@ class Provider:
     name: str = ""
     api_key_env: str | None = None
     default_voices: dict[str, str] = {}
+    # Set when the provider's mp3 output doesn't match the stock 22050 Hz gaps:
+    # audio.gap_blob then stitches with gaps/<name>_<gap_variant>.mp3 instead.
+    gap_variant: str | None = None
 
     def __init__(self, llm, api_key=None, settings=None, voices_config=None, features=None):
         self.llm = llm

@@ -39,9 +39,23 @@ def apply_word_replacements(text: str, replacements: dict[str, str]) -> str:
     return text
 
 
-def gap_blob() -> bytes:
-    """Read the chosen silent-mp3 gap. `gap_file` in config picks which one."""
+def gap_blob(provider: Provider | None = None) -> bytes:
+    """Read the chosen silent-mp3 gap. `gap_file` in config picks which one.
+
+    A provider whose mp3s aren't 22050 Hz sets `gap_variant`, and the
+    `gaps/<name>_<variant>.mp3` file is used instead. If that file is
+    missing, no gap at all — a mismatched-rate gap silently truncates
+    every clip after it, which is worse than clips butting together.
+    """
     name = load_config().get("gap_file") or DEFAULT_GAP
+    variant = getattr(provider, "gap_variant", None)
+    if variant:
+        path = GAPS_DIR / f"{name}_{variant}.mp3"
+        try:
+            return path.read_bytes()
+        except OSError as exc:
+            log(f"<gap error> {exc!r} path={path}; stitching without a gap")
+            return b""
     path = GAPS_DIR / f"{name}.mp3"
     try:
         return path.read_bytes()
@@ -144,7 +158,7 @@ def play_clips(clips: list[Clip], provider: Provider) -> None:
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     combined_mp3 = AUDIO_DIR / f"{AUDIO_PREFIX}{stamp}.mp3"
-    gap = gap_blob() if len(successful) > 1 else b""
+    gap = gap_blob(provider) if len(successful) > 1 else b""
     audio_parts = [audio for audio, _ in successful]
     stitched = audio_parts[0] + b"".join(gap + part for part in audio_parts[1:])
     combined_mp3.write_bytes(stitched)

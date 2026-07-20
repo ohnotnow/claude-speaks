@@ -16,7 +16,8 @@ that:
    own way: Mistral classifies the tone into one of nine emotional
    styles to pick a matching Jane voice; xAI skips the classifier and
    asks the summariser to embed inline prosody tags (`<soft>`,
-   `<emphasis>`, `<slow>`, …) directly in the text.
+   `<emphasis>`, `<slow>`, …) directly in the text; Kokoro runs
+   entirely on your own machine — slower, but free.
 4. Synthesises two TTS clips — Marvin's sigh in a monologue voice, then
    the reply in the main voice.
 5. Stitches them with a short silent mp3 gap and plays the result via
@@ -49,9 +50,11 @@ the reply, so silent failures are audible rather than mysterious.
 - macOS (uses `afplay` for playback by default; override via `player_command` in `config.json` if you're on something else)
 - Python 3.14+
 - [uv](https://docs.astral.sh/uv/)
-- An API key for whichever TTS provider you've configured (Mistral and xAI
-  ship in the box; others can be dropped into `providers/` — see
-  [providers/README.md](providers/README.md))
+- An API key for whichever TTS provider you've configured (Mistral, xAI,
+  OpenAI, ElevenLabs, and Kokoro ship in the box; others can be dropped
+  into `providers/` — see [providers/README.md](providers/README.md)).
+  Kokoro is the odd one out: it synthesises locally, so no API key —
+  see [Switching to Kokoro](#switching-to-kokoro-local-free)
 
 ## Setup
 
@@ -350,7 +353,7 @@ whichever speech backend you fancy. They don't have to share a vendor.
 | Key | Default | Notes |
 |---|---|---|
 | `llm_model` | `mistral/mistral-small-latest` | Any LiteLLM-supported model, used for the LLM-shaped work each provider needs (classifier, preamble, summariser, notification line). Try `mistral/ministral-3b-latest` for speed, or `anthropic/claude-haiku-4-5-20251001` for quality. |
-| `tts_provider` | `mistral` | The `name` of any provider in `providers/`. Mistral and xAI ship in the box; see [Switching to xAI](#switching-to-xai) for what changes when you flip between them, and [providers/README.md](providers/README.md) for adding more. |
+| `tts_provider` | `mistral` | The `name` of any provider in `providers/`. Mistral, xAI, OpenAI, ElevenLabs, and Kokoro ship in the box; see [Switching to xAI](#switching-to-xai) / [Switching to Kokoro](#switching-to-kokoro-local-free) for what changes when you flip between them, and [providers/README.md](providers/README.md) for adding more. |
 | `voices` | (per-provider defaults) | Per-provider voice config keyed by provider name and role. See [Voices](#voices). |
 | `provider_settings` | `{}` | Per-provider knobs (model id, output format, sample rate, etc.). Each provider reads its own slice via `self.settings`. See [provider_settings](#provider_settings). |
 | `gap_file` | `0_75s` | Which silent mp3 in `gaps/` to stitch between the preamble and the main reply. See below. |
@@ -380,12 +383,17 @@ an optional `language` (xAI only — Mistral ignores it).
     "main":         {"voice": "Eve", "language": "en"},
     "monologue":    {"voice": "Ara", "language": "fr"},
     "notification": {"voice": "Ara", "language": "ja"}
+  },
+  "kokoro": {
+    "main":         {"voice": "bm_george"},
+    "monologue":    {"voice": "bf_emma"},
+    "notification": {"voice": "bf_emma"}
   }
 }
 ```
 
-Configure both providers and flipping `tts_provider` between `mistral` and
-`xai` will pick up the matching voice block automatically — no shuffling
+Configure several providers and flipping `tts_provider` between them
+will pick up the matching voice block automatically — no shuffling
 voice ids around when you switch.
 
 A bare string is accepted as shorthand for the default object form:
@@ -407,7 +415,9 @@ tell whether a surprising line was the LLM misbehaving or just the
 dice. The TTS `language` you set under `notification` is independent of
 the dice — the LLM picks the words, your config picks the accent, and
 pleasing mismatches (Japanese text through a German-flagged voice, say)
-are very much encouraged.
+are very much encouraged. (Kokoro sits this game out — its voices are
+single-language, so the dice are ignored and quips default to English.
+See [Switching to Kokoro](#switching-to-kokoro-local-free).)
 
 On Mistral, the `main` voice is treated as a **prefix** — the classifier's
 nine-style suffix (`_neutral`, `_sarcasm`, etc.) gets appended automatically.
@@ -462,6 +472,66 @@ Example xAI config:
 Unknown or malformed tags are ignored by xAI rather than rejected, so no
 sanitiser is needed — Claude's reply goes through as-is.
 
+### Switching to Kokoro (local, free)
+
+[Kokoro](https://github.com/nazdridoy/kokoro-tts) synthesises on your own
+machine — no API key, no per-character bill, and it keeps working when
+your provider of choice is having a bad day. The trade-off is latency:
+each clip spawns a fresh CLI process that loads the 310 MB model before
+it says a word, so expect roughly 10–15 seconds from Claude finishing to
+audio starting (the cloud providers manage 2–5). Fine for the
+wander-off-and-make-coffee use case; annoying if you hover.
+
+Setup:
+
+1. Install the CLI: `uv tool install kokoro-tts`
+2. Download the two model files — `kokoro-v1.0.onnx` and
+   `voices-v1.0.bin` — into the claude-speaks project directory (the
+   [kokoro-tts README](https://github.com/nazdridoy/kokoro-tts) has the
+   current download links). Different locations work too, via
+   `provider_settings.kokoro.model_path` / `.voices_path`.
+3. Set `"tts_provider": "kokoro"` in `config.json`. No `.env` entry
+   needed — though the LLM calls still use whatever `llm_model` points
+   at, so that key stays.
+
+When `tts_provider` is `kokoro`:
+
+- No classifier, no prosody tags — Kokoro reads text literally, so the
+  prompts are plain-prose variants and the words have to carry the tone.
+- The summariser only runs on replies longer than ~60 words, like
+  Mistral's.
+- The idle-quip language dice (`notification_languages`) is ignored —
+  Kokoro voices are single-language, and an English voice phonemising
+  Japanese produces word salad rather than charming multilingual Marvin.
+  Quips are English by default; the comment block in
+  `prompts/kokoro/notification.md` explains how to change that if
+  you've configured a non-English voice.
+- Voice ids are literal (`bm_george`, `bf_emma`, `af_sky`, …) — run
+  `kokoro-tts --help-voices` for the list. Blends work as plain strings:
+  `"voice": "af_sarah:60,am_adam:40"`.
+- Playback is stitched with the 24 kHz gap files (`gaps/*_24k.mp3`)
+  automatically — see [Gaps between clips](#gaps-between-clips).
+
+Example kokoro config:
+
+```json
+{
+  "llm_model": "mistral/mistral-small-latest",
+  "tts_provider": "kokoro",
+  "voices": {
+    "kokoro": {
+      "main":         {"voice": "bm_george"},
+      "monologue":    {"voice": "bf_emma"},
+      "notification": {"voice": "bf_emma"}
+    }
+  }
+}
+```
+
+One quirk worth knowing: Kokoro's mp3s carry a Xing header, so `afinfo`
+reports a stitched file's duration as just the first clip. Playback is
+unaffected — don't let it send you down a debugging hole.
+
 ### provider_settings
 
 Per-provider knobs — model ids, output formats, sample rates, anything
@@ -469,20 +539,31 @@ the backend wants — live in `provider_settings.<provider_name>`. Each
 provider reads its own slice via `self.settings` and merges it over its
 own internal defaults, so omitting the block entirely is fine.
 
-xAI is the only built-in that exposes anything here:
+xAI exposes its output format, and Kokoro its paths and pacing:
 
 ```json
 "provider_settings": {
   "xai": {
     "sample_rate": 22050,
     "bit_rate": 64000
+  },
+  "kokoro": {
+    "cli_path": "kokoro-tts",
+    "model_path": "kokoro-v1.0.onnx",
+    "voices_path": "voices-v1.0.bin",
+    "language": "en-gb",
+    "speed": 1.0,
+    "timeout": 120
   }
 }
 ```
 
-These match the gap mp3s in `gaps/` and shouldn't be changed unless you
-also swap the gap files — see [Gaps between clips](#gaps-between-clips)
-for what happens if they don't agree.
+xAI's rates match the gap mp3s in `gaps/` and shouldn't be changed unless
+you also swap the gap files — see [Gaps between clips](#gaps-between-clips)
+for what happens if they don't agree. Kokoro's relative paths resolve
+against the claude-speaks directory (absolute paths work too), `language`
+is the accent used when a voice doesn't set its own, and `timeout` is the
+per-clip synthesis cap in seconds.
 
 ### Adding a TTS provider
 
@@ -523,6 +604,14 @@ truncate playback at the boundary. The xAI provider pins its output
 explicitly via `provider_settings.xai`; if you swap in a provider that
 emits something else, expect to either match the rate or replace the
 gaps and update `provider_settings` to match.
+
+Kokoro emits 24 kHz mp3s, so each gap also ships in a `_24k` variant
+(`0_75s_24k.mp3` and friends) generated at that rate. Providers declare
+the variant they need (`gap_variant = "24k"` in `providers/kokoro.py`)
+and `audio.py` picks the right file for whatever `gap_file` you've
+chosen — no config change needed when switching providers. If you add a
+custom gap duration for Kokoro, render it at `r=24000` and name it
+`<name>_24k.mp3`.
 
 ### Features
 

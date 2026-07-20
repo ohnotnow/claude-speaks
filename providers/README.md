@@ -66,8 +66,9 @@ The `features.notification` toggle is enforced in `main.py` before this
 method is called, so you can assume the user wants a clip.
 
 `synthesise(clip) -> bytes | None` — Turn one `Clip` into mp3 bytes. The
-HTTP call lives here. Catch your own exceptions, log with a tag like
-`<yourname synth>` or `<yourname error>`, return `None` on failure.
+HTTP call (or subprocess, for a local engine — see `kokoro.py`) lives
+here. Catch your own exceptions, log with a tag like `<yourname synth>`
+or `<yourname error>`, return `None` on failure.
 
 ## The sample-rate landmine
 
@@ -78,8 +79,20 @@ between them. No demuxing, no ffmpeg. The shipped gaps in `gaps/` are
 just doesn't play, no error.
 
 Either match the rate when you call your TTS API (`xai.py` does this
-explicitly via the `sample_rate` and `bit_rate` payload fields), or
-replace the gap mp3s and document the new rate.
+explicitly via the `sample_rate` and `bit_rate` payload fields), or —
+if your engine's rate is fixed — set the `gap_variant` class attribute
+and ship matching gap files. Kokoro's output is always 24 kHz, so it
+sets `gap_variant = "24k"` and `audio.gap_blob` stitches with
+`gaps/<name>_24k.mp3` instead of `gaps/<name>.mp3`, whatever `gap_file`
+the user picked. Ship a variant of every gap duration (render with
+ffmpeg at your rate). If the variant file is missing at runtime, the
+stitch falls back to *no* gap rather than a wrong-rate one — clips butt
+together but everything still plays.
+
+Related quirk: if your engine's mp3s carry a Xing/LAME header (Kokoro's
+do), `afinfo` will report a stitched file's duration as just the first
+clip. Playback is unaffected — afplay ignores the header and plays the
+whole byte stream — so don't chase it as a bug.
 
 ## Prompts
 
@@ -189,7 +202,7 @@ The user is making coffee. Silence is worse than a slightly-wrong line.
 
 See `providers/mistral.py` for the canonical error-prepend pattern.
 
-## Two worked examples
+## Three worked examples
 
 - **`providers/mistral.py`** — suffix-style. Voice ids are prefixes; a
   tone classifier picks one of nine emotional styles and `_<style>` is
@@ -202,6 +215,12 @@ See `providers/mistral.py` for the canonical error-prepend pattern.
   LLM calls. Look here if your provider accepts SSML-ish or audio-tag
   markup (ElevenLabs' `[whispers]` / `[laughs]`, OpenAI's instructions,
   etc.).
+- **`providers/kokoro.py`** — local-CLI style. No API key
+  (`api_key_env = None`), no tags, no styles: `synthesise` shells out
+  to the `kokoro-tts` binary with temp files and reads the mp3 back.
+  Sets `gap_variant = "24k"` because the engine's output rate is fixed.
+  Look here if your provider is a local binary or anything else that
+  isn't an HTTP API.
 
 ## Skeleton
 

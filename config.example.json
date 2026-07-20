@@ -41,6 +41,11 @@
       "main": {"voice": "coral", "instructions": "Speak clearly and naturally, in a calm measured tone."},
       "monologue": {"voice": "ash", "instructions": "Speak in the voice of Marvin the Paranoid Android: weary, deadpan, drained of enthusiasm."},
       "notification": {"voice": "ash", "instructions": "Speak in the voice of Marvin the Paranoid Android: weary, deadpan, drained of enthusiasm."}
+    },
+    "kokoro": {
+      "main": {"voice": "bm_george"},
+      "monologue": {"voice": "bf_emma"},
+      "notification": {"voice": "bf_emma"}
     }
   },
   "provider_settings": {
@@ -57,6 +62,15 @@
       "model": "gpt-4o-mini-tts",
       "sample_rate": 22050,
       "bit_rate": 56000
+    },
+    "kokoro": {
+      "_note": "Local provider, no API key. Outputs 24 kHz mp3, stitched with the gaps/*_24k.mp3 variants automatically. voice blends work too: \"af_sarah:60,am_adam:40\".",
+      "cli_path": "kokoro-tts",
+      "model_path": "kokoro-v1.0.onnx",
+      "voices_path": "voices-v1.0.bin",
+      "language": "en-gb",
+      "speed": 1.0,
+      "timeout": 120
     }
   },
   "server": {
