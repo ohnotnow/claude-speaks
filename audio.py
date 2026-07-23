@@ -86,11 +86,15 @@ def fallback_sound_path() -> Path:
     return Path(str(raw)) if raw else DEFAULT_FALLBACK_SOUND
 
 
-def play_audio_file(path: Path) -> None:
-    """Play a single audio file via the configured player, detached."""
+def play_audio_file(path: Path) -> subprocess.Popen | None:
+    """Play a single audio file via the configured player, detached.
+
+    Returns the player process so callers that care (the hands-free arm
+    path) can wait for playback to finish; everyone else ignores it.
+    """
     argv = player_argv() + [str(path)]
     try:
-        subprocess.Popen(
+        return subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -99,6 +103,7 @@ def play_audio_file(path: Path) -> None:
         )
     except Exception as exc:
         log(f"<player error> {exc!r} argv={argv}")
+        return None
 
 
 def play_fallback_sound() -> None:
@@ -134,10 +139,13 @@ def _safe_synthesise(provider: Provider, clip: Clip) -> bytes | None:
         return None
 
 
-def play_clips(clips: list[Clip], provider: Provider) -> None:
-    """Synthesise each clip in parallel, stitch with a silent gap, play via the configured player."""
+def play_clips(clips: list[Clip], provider: Provider) -> subprocess.Popen | None:
+    """Synthesise each clip in parallel, stitch with a silent gap, play via the configured player.
+
+    Returns the player process when something is actually playing, else None.
+    """
     if not clips:
-        return
+        return None
 
     replacements = load_word_replacements()
     if replacements:
@@ -152,7 +160,7 @@ def play_clips(clips: list[Clip], provider: Provider) -> None:
     if not successful:
         log("<fallback> all TTS synthesis failed; playing system sound")
         play_fallback_sound()
-        return
+        return None
     if len(successful) < len(clips):
         log(f"<partial> {len(successful)}/{len(clips)} clips synthesised; playing what we have")
 
@@ -169,4 +177,4 @@ def play_clips(clips: list[Clip], provider: Provider) -> None:
 
     rotate_audio_archive()
 
-    play_audio_file(combined_mp3)
+    return play_audio_file(combined_mp3)

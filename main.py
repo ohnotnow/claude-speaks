@@ -11,6 +11,7 @@ import sys
 
 import litellm
 
+import handsfree
 from audio import play_clips, play_fallback_sound
 from config import (
     ENV_FILE,
@@ -36,7 +37,8 @@ def handle_stop(payload: dict, provider) -> None:
     text = strip_markdown((payload.get("last_assistant_message") or "").strip())
     if not text:
         return
-    play_clips(provider.plan_stop_clips(text), provider)
+    player = play_clips(provider.plan_stop_clips(text), provider)
+    handsfree.maybe_arm(payload.get("session_id"), player)
 
 
 def handle_notification(provider) -> None:
