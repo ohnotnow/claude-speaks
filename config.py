@@ -113,6 +113,18 @@ def features() -> dict[str, bool]:
     return {k: bool(raw.get(k, default)) for k, default in DEFAULT_FEATURES.items()}
 
 
+def handsfree_arm_command() -> list[str] | None:
+    """Command that arms the microphone (toggle semantics: same command starts
+    and stops a recording). Hands-free declines to arm when unconfigured."""
+    raw = load_config().get("handsfree_arm_command")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not raw or not all(isinstance(x, str) for x in raw):
+        log(f"<handsfree_arm_command> expected non-empty list of strings, got {raw!r}; ignoring")
+        return None
+    return raw
+
+
 def personas() -> dict[str, str | None]:
     raw = load_config().get("personas") or {}
     if not isinstance(raw, dict):
