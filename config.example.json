@@ -80,6 +80,7 @@
   "gap_file": "0_75s",
   "player_command": "afplay",
   "fallback_sound": "/System/Library/Sounds/Funk.aiff",
+  "handsfree_arm_command": null,
   "word_replacements": {
     "vite": "veet",
     "nginx": "engine-ex",

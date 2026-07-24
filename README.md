@@ -357,6 +357,42 @@ If `HERMES_SPEAKS_URL`/`TOKEN` aren't set (and neither are their
 `CLAUDE_SPEAKS_*` fallbacks), the plugin silently no-ops — handy when
 Hermes is sometimes on the same network as the Mac and sometimes not.
 
+## Hands-free voice replies (optional, off by default)
+
+claude-speaks has a sibling project,
+[claude-listens](https://github.com/ohnotnow/claude-listens), which closes
+the loop in the other direction: after Marvin reads a reply aloud, your
+microphone arms itself, you answer out loud, and your words land back in
+the same Claude Code session. claude-speaks' entire contribution to that
+loop is one small hook (`handsfree.py`): once playback finishes, it looks
+up the speaking session in claude-listens' registry, records where the
+reply should go, and runs the configured arm command.
+
+**Because this can switch on your microphone, it never activates by
+accident.** All of the following must be true before the mic arms:
+
+- the flag file `~/.claude-voice/handsfree` exists (claude-listens'
+  `handsfree on|off|toggle` CLI manages it),
+- `handsfree_arm_command` is set in `config.json` — there is no default;
+  unconfigured means the hook logs and declines,
+- the session that just spoke has a live entry in the registry (i.e. it was
+  launched as a voice-channel session via claude-listens).
+
+Delete the flag file or remove the config key and claude-speaks is back to
+being a pure text-to-speech hook. To set it up:
+
+```json
+"handsfree_arm_command": ["/absolute/path/to/claude-listens/bin/ears", "arm"]
+```
+
+The command must *attempt* to arm the recorder and exit non-zero when it
+did not get the microphone (recorder busy, daemon down) — claude-listens'
+`ears arm` does exactly that, and on a non-zero exit the hook removes the
+reply target it just wrote, so an in-flight recording from another session
+is never stopped or re-routed. See the claude-listens README for the rest
+of the loop — the speech-to-text daemon, the channel server, and the
+research-preview Claude Code flag it all rides on.
+
 ## Configuration
 
 API keys live in `.env`. Everything else lives in `config.json` (copy
