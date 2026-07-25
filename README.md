@@ -1,8 +1,7 @@
 # claude-speaks
 
 **Work in progress.** A small experiment: have Claude Code read its final
-reply out loud, so you can wander off and make a coffee while it works and
-still catch what it said.
+reply out loud.
 
 It's a [Claude Code Stop hook](https://docs.claude.com/en/docs/claude-code/hooks)
 that:
@@ -12,38 +11,25 @@ that:
 3. Hands the text to the configured TTS provider, which fans out
    parallel LLM calls via LiteLLM (model configurable — see
    Configuration) to produce a Marvin-the-Paranoid-Android-style sigh
-   and a TTS-friendly version of the reply. Each provider does this its
-   own way: Mistral classifies the tone into one of nine emotional
-   styles to pick a matching Jane voice; xAI skips the classifier and
-   asks the summariser to embed inline prosody tags (`<soft>`,
-   `<emphasis>`, `<slow>`, …) directly in the text; Kokoro runs
-   entirely on your own machine — slower, but free.
+   and a TTS-friendly version of the reply.
 4. Synthesises two TTS clips — Marvin's sigh in a monologue voice, then
    the reply in the main voice.
 5. Stitches them with a short silent mp3 gap and plays the result via
-   `afplay` as a detached subprocess.
+   `afplay`.
 
-The codebase splits along those lines: `main.py` is a thin entry point
-(~85 lines, reads stdin and dispatches), each TTS backend lives in its
-own file under `providers/`, and `audio.py` does the stitching and
-playback. Adding a new backend is a single new file in `providers/` —
-see [providers/README.md](providers/README.md) for the contract.
+Internals live in [TECHNICAL_OVERVIEW.md](TECHNICAL_OVERVIEW.md).
 
 There's also a Notification handler for when Claude Code is idle or
-waiting for permission — Marvin pipes up with a short weary quip in the
-notification voice (a separate role from monologue, so the idle nag can
-have its own voice and language). A rolling history of recent lines is
-fed back into the prompt to stop him repeating himself, and Python
-rolls a weighted die to pick the language — by default English, German,
-Japanese, Chinese, Hindi, Korean, or Vietnamese, with English weighted
-at 1 and the others at 5 each (so English shows up roughly one time in
-31). The list is editable in `config.json` — set it to a single
-language if multilingual Marvin isn't your thing. See
+waiting for permission — a short weary Marvin quip in the notification
+voice. A rolling history of recent lines is fed back into the prompt to
+stop him repeating himself, and the language is picked at random from a
+weighted list in `config.json` - set it to a single language if
+multilingual Marvin isn't your thing. See
 [Customising the personality](#customising-the-personality).
 
 If any of the LLM calls fail, the hook prepends a short spoken heads-up
 ("heads up — the summariser call fell over, raw reply coming up") before
-the reply, so silent failures are audible rather than mysterious.
+the reply.
 
 ## Requirements
 
@@ -53,8 +39,8 @@ the reply, so silent failures are audible rather than mysterious.
 - An API key for whichever TTS provider you've configured (Mistral, xAI,
   OpenAI, ElevenLabs, and Kokoro ship in the box; others can be dropped
   into `providers/` — see [providers/README.md](providers/README.md)).
-  Kokoro is the odd one out: it synthesises locally, so no API key —
-  see [Switching to Kokoro](#switching-to-kokoro-local-free)
+  Kokoro is the odd one out: it does text-to-speech on your own machine,
+  so no API key — see [Switching to Kokoro](#switching-to-kokoro-local-free)
 
 ## Setup
 
@@ -106,11 +92,9 @@ Restart your Claude Code session and Claude should start speaking back.
 
 Claude Code normally waits for a hook to finish before handing the
 session back to you — and this hook does real work (LLM calls, then TTS
-synthesis) before it returns. With a fast cloud provider that's a
-tolerable 2–3 seconds; with Kokoro synthesising locally the wait can
-stretch long enough to be properly annoying if you're at the keyboard
-rather than the kettle. Adding `"async": true` to the hook definition
-tells Claude Code to fire the hook and move on:
+synthesis) before it returns. Depending on your machine and provider,
+latency can be a problem however. Adding `"async": true` to the hook
+definition tells Claude Code to fire the hook and move on:
 
 ```json
 {
@@ -120,27 +104,20 @@ tells Claude Code to fire the hook and move on:
 }
 ```
 
-You get your prompt back instantly and the audio arrives when it's
-ready. Strongly recommended for Kokoro; a pleasant upgrade for the
-cloud providers too.
+Strongly recommended for Kokoro.
 
-One gotcha: the blocking behaviour was quietly acting as a queue. With
-`async` on, nothing stops a quick follow-up turn kicking off a second
-run while the first is still talking, so very occasionally you'll hear
-two streams of audio at once. The `killall afplay` panic button in
+One gotcha: with `async` on, nothing stops a quick follow-up turn
+kicking off a second run while the first is still talking, so very
+occasionally you'll hear two streams of audio at once. The
+`killall afplay` panic button in
 [Shutting Marvin up mid-sentence](#shutting-marvin-up-mid-sentence)
-silences both in one keystroke.
+silences both.
 
 ## Remote mode (Raspberry Pi → Mac)
 
 If you run Claude Code on a headless box (a Raspberry Pi left ticking
 away, a remote server you've SSH'd into, etc.) but want the audio out
 of your Mac's speakers, `server.py` gives you a small HTTP shim.
-
-The Pi-side hook POSTs the same JSON it would normally hand to
-`main.py` on stdin; the Mac receives it, runs the full
-provider → LLM → TTS pipeline, and plays the audio locally. The Pi
-never sees a TTS response.
 
 ### On the Mac (server side)
 
@@ -212,8 +189,7 @@ isn't on Linux. Set `player_command` (and likely `fallback_sound`) in
 
 ### On the Pi (client side)
 
-The repo ships `scripts/remote-hook.py` — stdlib-only Python, so the
-Pi doesn't need uv or any dependencies installed. On the Pi:
+The repo ships `scripts/remote-hook.py` — stdlib-only Python. On the Pi:
 
 1. Clone the repo (or just copy that one script).
 2. Set two env vars where Claude Code will see them (e.g. in
@@ -244,9 +220,8 @@ Pi doesn't need uv or any dependencies installed. On the Pi:
    }
    ```
 
-The server replies with `202 Accepted` as soon as the payload is
-queued, so the Pi's hook returns in milliseconds — TTS work happens
-in a background thread on the Mac.
+The server replies with `202 Accepted` as soon as the payload hits, so
+the Pi's hook returns right away.
 
 A quick smoke test from the Pi:
 
@@ -257,18 +232,16 @@ echo '{"hook_event_name":"Notification"}' \
     python3 scripts/remote-hook.py
 ```
 
-If the token is missing or wrong you'll get `401 unauthorized`; if the
-server can't read its own `CLAUDE_SPEAKS_TOKEN`, it refuses to start.
+If the token is missing or wrong you'll get `401 unauthorized`.
 
 ### Per-request overrides
 
 If you've got Claude on the Mac, Claude on the Pi, and Hermes all
 piping audio through the same Mac, hearing the same voice three times
 gets confusing fast. Every payload accepts an optional `claude_speaks`
-block that deep-merges onto `config.json` *for that request only* — no
-restart, no second config file. Anything from `config.json` is fair
-game: `tts_provider`, `voices`, `features`, `llm_model`,
-`provider_settings`, etc.
+block that deep-merges onto `config.json` *for that request only*.
+Anything from `config.json` is fair game: `tts_provider`, `voices`,
+`features`, `llm_model`, `provider_settings`, etc.
 
 Example payload from the Pi, configuring "rpi-claude" to use a French
 Marvin voice and skip the idle nag:
@@ -300,28 +273,24 @@ export CLAUDE_SPEAKS_OVERRIDES='{"voices":{"mistral":{"main":"fr_marie"}}}'
 export HERMES_SPEAKS_OVERRIDES='{"voices":{"mistral":{"main":"gb_jane_confident"}}}'
 ```
 
-The Hermes plugin additionally ships with a sensible default of
-`{"features": {"monologue": false, "notification": false}}` so
-Marvin's preamble doesn't gatecrash a non-Claude agent. Setting
+The Hermes plugin additionally ships with a default of
+`{"features": {"monologue": false, "notification": false}}`. Setting
 `HERMES_SPEAKS_OVERRIDES` (or its `CLAUDE_SPEAKS_OVERRIDES` fallback)
 replaces that default, so include the features block yourself if you
 still want those stages off.
 
-Each merged-in overlay is logged on the Mac as `<config overrides>`
-so you can tell which client triggered which voice when something
-unexpected comes out of the speakers.
+Each merged-in overlay is logged on the Mac as `<config overrides>`.
 
 ### Other agents (Hermes, etc.)
 
 The endpoint only cares about two JSON keys — `hook_event_name`
 (`"Stop"` or `"Notification"`) and `last_assistant_message` — so any
-agent that lets you run code at end-of-turn can drive it.
+agent that lets you run something when it finishes writing can drive it.
 
 `scripts/hermes-speaks/` ships a worked example for
 [Hermes](https://nousresearch.com): a proper Hermes plugin (manifest
-plus `__init__.py`) that hooks `post_llm_call`, wraps the final reply
-in the right JSON shape, POSTs to the server in a background thread,
-and returns `None` so Hermes delivers its own text unchanged.
+plus `__init__.py`) that hooks `post_llm_call` and POSTs the final
+reply to the server.
 
 Install it on the Pi (or wherever Hermes runs) by copying the two
 files into Hermes' user-plugins directory and enabling it:
@@ -336,8 +305,7 @@ hermes plugins enable hermes-speaks
 
 Then set the URL and token where Hermes can see them — Hermes-specific
 names are preferred, with the existing `CLAUDE_SPEAKS_*` vars accepted
-as a fallback so you don't have to set them twice if Claude Code on
-the same box already does:
+as a fallback:
 
 ```bash
 export HERMES_SPEAKS_URL='http://your-mac.local:8765/hook'
@@ -348,38 +316,22 @@ export HERMES_SPEAKS_OVERRIDES='{"voices":{"mistral":{"main":"gb_jane_confident"
 
 Restart Hermes (`hermes gateway restart`, or just start a fresh
 `hermes` session) so the plugin loads and picks up the env vars. The
-plugin defaults to disabling the `monologue` and `notification` stages
-— Marvin's sigh and the idle nag belong to Claude, not Hermes — so out
-of the box you'll get Hermes' reply spoken in the `main` voice and
-nothing else. Override `HERMES_SPEAKS_OVERRIDES` to change that.
+plugin defaults to disabling the `monologue` and `notification` stages.
+Override `HERMES_SPEAKS_OVERRIDES` to change that.
 
 If `HERMES_SPEAKS_URL`/`TOKEN` aren't set (and neither are their
-`CLAUDE_SPEAKS_*` fallbacks), the plugin silently no-ops — handy when
-Hermes is sometimes on the same network as the Mac and sometimes not.
+`CLAUDE_SPEAKS_*` fallbacks), the plugin silently no-ops.
 
 ## Hands-free voice replies (optional, off by default)
 
 claude-speaks has a sibling project,
 [claude-listens](https://github.com/ohnotnow/claude-listens), which closes
-the loop in the other direction: after Marvin reads a reply aloud, your
-microphone arms itself, you answer out loud, and your words land back in
+the loop in the other direction: after claude reads a reply aloud, your
+microphone turns on, you answer out loud, and your words land back in
 the same Claude Code session. claude-speaks' entire contribution to that
-loop is one small hook (`handsfree.py`): once playback finishes, it looks
-up the speaking session in claude-listens' registry, records where the
-reply should go, and runs the configured arm command.
+loop is one small hook (`handsfree.py`).
 
-**Because this can switch on your microphone, it never activates by
-accident.** All of the following must be true before the mic arms:
-
-- the flag file `~/.claude-voice/handsfree` exists (claude-listens'
-  `handsfree on|off|toggle` CLI manages it),
-- `handsfree_arm_command` is set in `config.json` — there is no default;
-  unconfigured means the hook logs and declines,
-- the session that just spoke has a live entry in the registry (i.e. it was
-  launched as a voice-channel session via claude-listens).
-
-Delete the flag file or remove the config key and claude-speaks is back to
-being a pure text-to-speech hook. To set it up:
+To set it up, in `config.json`:
 
 ```json
 "handsfree_arm_command": ["/absolute/path/to/claude-listens/bin/ears", "arm"]
@@ -387,11 +339,8 @@ being a pure text-to-speech hook. To set it up:
 
 The command must *attempt* to arm the recorder and exit non-zero when it
 did not get the microphone (recorder busy, daemon down) — claude-listens'
-`ears arm` does exactly that, and on a non-zero exit the hook removes the
-reply target it just wrote, so an in-flight recording from another session
-is never stopped or re-routed. See the claude-listens README for the rest
-of the loop — the speech-to-text daemon, the channel server, and the
-research-preview Claude Code flag it all rides on.
+`ears arm` does exactly that. See the claude-listens README for the rest
+of the loop.
 
 ## Configuration
 
@@ -403,7 +352,7 @@ The LLM (used for the Marvin preamble, summariser, and any classifier the
 provider wants) and the TTS provider (used to actually speak) are
 independent. Set `llm_model` to anything LiteLLM supports — Claude,
 GPT, Mistral chat, a local Ollama model — and `tts_provider` to
-whichever speech backend you fancy. They don't have to share a vendor.
+whichever speech backend you fancy.
 
 `.env`:
 
@@ -426,15 +375,13 @@ use — a hook that makes Marvin sigh at you qualifies comfortably.)
 
 Set the token *or* `ANTHROPIC_API_KEY` — not both. Claude Code's
 credential precedence puts the API key above the token, so with both set
-every call would quietly bill your API account. Rather than let that
-happen, the hook refuses to run the event: it logs `<auth guard>` and
-plays the fallback sound. If you hear the Funk and see that log line,
-remove one of the two from `.env` (and check your shell isn't exporting
-`ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` globally either — the
-guard looks at the whole environment, because that's what gets billed).
+every call would quietly bill your API account. The hook refuses to run
+the event: it logs `<auth guard>` and plays the fallback sound. If you
+hear a system sound and see that log line, remove one of the two from
+`.env` (and check your shell isn't exporting `ANTHROPIC_API_KEY` or
+`ANTHROPIC_AUTH_TOKEN` globally either).
 
-One trade-off: each SDK call boots the Claude Code CLI rather than making
-a single HTTP request, which adds a few seconds of latency per turn.
+One trade-off: each SDK call adds a few seconds of latency per turn.
 
 `config.json`:
 
@@ -456,9 +403,8 @@ a single HTTP request, which adds a few seconds of latency per turn.
 `voices` is keyed first by provider, then by role. Three roles: `main`
 (Jane, who speaks the actual reply), `monologue` (Marvin, who sighs
 before the reply on Stop), and `notification` (Marvin again, but for the
-idle "still waiting" quip — kept separate so the two flavours of Marvin
-don't have to share a voice or language). Each role takes a `voice` and
-an optional `language` (xAI only — Mistral ignores it).
+idle "still waiting" quip). Each role takes a `voice` and an optional
+`language` (xAI only — Mistral ignores it).
 
 ```json
 "voices": {
@@ -481,8 +427,7 @@ an optional `language` (xAI only — Mistral ignores it).
 ```
 
 Configure several providers and flipping `tts_provider` between them
-will pick up the matching voice block automatically — no shuffling
-voice ids around when you switch.
+will pick up the matching voice block automatically.
 
 A bare string is accepted as shorthand for the default object form:
 `"main": "Eve"` is the same as `"main": {"voice": "Eve"}`.
@@ -496,16 +441,13 @@ fills in. Languages default to `en`.
 
 **Notification languages.** The idle notification line is generated in
 one of seven languages — English, German, Japanese, Chinese, Hindi,
-Korean, or Vietnamese — picked by a weighted die in Python (English at
-1, the others at 5 each, so English shows up roughly one time in 31).
-The chosen language is logged as `<notification language>` so you can
-tell whether a surprising line was the LLM misbehaving or just the
-dice. The TTS `language` you set under `notification` is independent of
-the dice — the LLM picks the words, your config picks the accent, and
-pleasing mismatches (Japanese text through a German-flagged voice, say)
-are very much encouraged. (Kokoro sits this game out — its voices are
-single-language, so the dice are ignored and quips default to English.
-See [Switching to Kokoro](#switching-to-kokoro-local-free).)
+Korean, or Vietnamese — picked at random and weighted (English at 1, the
+others at 5 each). The chosen language is logged as
+`<notification language>`. The TTS `language` you set under
+`notification` is independent — the LLM picks the words, your config
+picks the accent. (Kokoro ignores the setting: its voices are
+single-language, so quips default to English. See
+[Switching to Kokoro](#switching-to-kokoro-local-free).)
 
 On Mistral, the `main` voice is treated as a **prefix** — the classifier's
 nine-style suffix (`_neutral`, `_sarcasm`, etc.) gets appended automatically.
@@ -518,8 +460,7 @@ for getting xAI close to `fr_marie_sad`'s dejection — see below.
 
 Jane's nine emotional styles (Mistral only): `neutral`, `sarcasm`, `confused`,
 `shameful`, `sad`, `jealousy`, `frustrated`, `curious`, `confident`. The
-classifier is biased towards `neutral`, so you'll mostly hear that one and
-only get the other flavours when Claude's reply genuinely calls for it.
+classifier is biased towards `neutral`, so you'll mostly hear that one.
 
 ### Switching to xAI
 
@@ -533,13 +474,11 @@ set of inline prosody tags wrapped around spans of text — `<soft>`,
 - The summariser and preamble prompts are swapped for xAI variants that
   list the allowed tags and ask the LLM to wrap a span or two where it
   genuinely aids delivery.
-- The summariser runs even on short replies, so a "Done." can still pick
-  up a `<slow>` if the model thinks it deserves one.
+- The summariser runs even on short replies.
 - Marvin gets his own voice id — pick something distinct from Jane's so
   the preamble doesn't blur into the reply (`Ara` is a reasonable contrast
   with `Eve`). Then set `monologue.language` to `fr` so xAI speaks the
-  English line with a French inflection — much closer to the right level
-  of resentment than any of xAI's default voices manage on their own.
+  English line with a French inflection.
 
 Example xAI config:
 
@@ -557,20 +496,13 @@ Example xAI config:
 }
 ```
 
-Unknown or malformed tags are ignored by xAI rather than rejected, so no
-sanitiser is needed — Claude's reply goes through as-is.
-
 ### Switching to Kokoro (local, free)
 
-[Kokoro](https://github.com/nazdridoy/kokoro-tts) synthesises on your own
-machine — no API key, no per-character bill, and it keeps working when
-your provider of choice is having a bad day. The trade-off is latency:
-each clip spawns a fresh CLI process that loads the 310 MB model before
-it says a word, so expect roughly 10–15 seconds from Claude finishing to
-audio starting (the cloud providers manage 2–5). Fine for the
-wander-off-and-make-coffee use case; annoying if you hover. Either way,
-set `"async": true` on the hook so the wait happens in the background
-rather than blocking your session — see
+[Kokoro](https://github.com/nazdridoy/kokoro-tts) does text-to-speech on
+your own machine — no API key, no per-character bill. Depending on your
+machine, latency can be a problem however. Set `"async": true` on the
+hook so the wait happens in the background rather than blocking your
+session — see
 [Running the hook in the background](#running-the-hook-in-the-background).
 
 Setup:
@@ -588,13 +520,11 @@ Setup:
 When `tts_provider` is `kokoro`:
 
 - No classifier, no prosody tags — Kokoro reads text literally, so the
-  prompts are plain-prose variants and the words have to carry the tone.
+  prompts are plain-prose variants.
 - The summariser only runs on replies longer than ~60 words, like
   Mistral's.
-- The idle-quip language dice (`notification_languages`) is ignored —
-  Kokoro voices are single-language, and an English voice phonemising
-  Japanese produces word salad rather than charming multilingual Marvin.
-  Quips are English by default; the comment block in
+- `notification_languages` is ignored — Kokoro voices are
+  single-language. Quips are English by default; the comment block in
   `prompts/kokoro/notification.md` explains how to change that if
   you've configured a non-English voice.
 - Voice ids are literal (`bm_george`, `bf_emma`, `af_sky`, …) — run
@@ -619,16 +549,11 @@ Example kokoro config:
 }
 ```
 
-One quirk worth knowing: Kokoro's mp3s carry a Xing header, so `afinfo`
-reports a stitched file's duration as just the first clip. Playback is
-unaffected — don't let it send you down a debugging hole.
-
 ### provider_settings
 
 Per-provider knobs — model ids, output formats, sample rates, anything
-the backend wants — live in `provider_settings.<provider_name>`. Each
-provider reads its own slice via `self.settings` and merges it over its
-own internal defaults, so omitting the block entirely is fine.
+the backend wants — live in `provider_settings.<provider_name>`.
+Omitting the block entirely is fine.
 
 xAI exposes its output format, and Kokoro its paths and pacing:
 
@@ -658,10 +583,9 @@ per-clip synthesis cap in seconds.
 
 ### Adding a TTS provider
 
-`providers/` is a drop-in folder. To add ElevenLabs, OpenAI, Replicate,
-Piper, or anything else, write one new file that implements the
-provider contract and the rest of the project picks it up automatically
-— no edits to `main.py`, no entry in a registry. See
+`providers/` is a drop-in folder. To add Replicate, Piper, or anything
+else, write one new file that implements the provider contract and the
+rest of the project picks it up automatically. See
 [providers/README.md](providers/README.md) for the contract, the worked
 examples, and a copy-pasteable skeleton.
 
@@ -700,16 +624,13 @@ Kokoro emits 24 kHz mp3s, so each gap also ships in a `_24k` variant
 (`0_75s_24k.mp3` and friends) generated at that rate. Providers declare
 the variant they need (`gap_variant = "24k"` in `providers/kokoro.py`)
 and `audio.py` picks the right file for whatever `gap_file` you've
-chosen — no config change needed when switching providers. If you add a
-custom gap duration for Kokoro, render it at `r=24000` and name it
-`<name>_24k.mp3`.
+chosen. If you add a custom gap duration for Kokoro, render it at
+`r=24000` and name it `<name>_24k.mp3`.
 
 ### Features
 
-Three independent toggles let you switch off any of the spoken stages —
-useful if you want the Marvin preamble but not the full reply, or want
-silence when Claude is idle. Default is all three on, so omitting the
-block keeps the original behaviour.
+Three independent toggles let you switch off any of the spoken stages.
+Default is all three on.
 
 ```json
 "features": {
@@ -721,12 +642,11 @@ block keeps the original behaviour.
 
 | Toggle | What it controls |
 |---|---|
-| `monologue` | The Marvin sigh that runs before the reply on Stop. Disabling it skips the preamble LLM call entirely — no wasted tokens. |
-| `main` | The summarised/spoken version of Claude's actual reply. Disabling it skips the summariser (and the Mistral tone classifier). Switching this off and leaving `monologue` on gives you only the Marvin quip — the use case you'd reach for if you only want the personality, not the recap. |
+| `monologue` | The Marvin sigh that runs before the reply on Stop. Disabling it skips the preamble LLM call entirely. |
+| `main` | The summarised/spoken version of Claude's actual reply. Disabling it skips the summariser (and the Mistral tone classifier). Switching this off and leaving `monologue` on gives you only the Marvin quip. |
 | `notification` | The idle "still waiting" nag. Disabling it short-circuits the Notification handler entirely — no LLM call, no audio. |
 
-If both `monologue` and `main` are off, Stop events go quiet — nothing
-is synthesised or played. The hook still returns cleanly.
+If both `monologue` and `main` are off, Stop events go quiet.
 
 ### Word replacements
 
@@ -748,8 +668,7 @@ hits the TTS, regardless of provider. Matching is case-insensitive and on word b
 ```
 
 `config.example.json` ships with a starter set — copy it to `config.json`
-and edit to taste. If the section's missing or malformed, the hook just
-skips the step.
+and edit to taste.
 
 ## Customising the personality
 
@@ -784,15 +703,11 @@ both of these work:
 Drop new persona files in `personas.local/` (gitignored, survives
 `git pull`) — see [personas/README.md](personas/README.md) for the
 file format. The shipped `personas/marvin.md` is the source of truth
-for the Marvin character; nine other prompt files used to repeat it
-and now don't.
+for the Marvin character.
 
 `personas.main` controls a third, subtler thing: when set, the
 summariser is asked to **preserve** a beat of that voice when
-compressing Claude's actual reply (handy if the upstream agent is
-already writing in a specific character and you don't want the
-summariser to flatten it). Defaults to `null` — no change to today's
-behaviour.
+compressing Claude's actual reply. Defaults to `null`.
 
 > **OpenAI users:** the TTS-level `voices.openai.<role>.instructions`
 > field shapes the *spoken delivery* separately from the LLM prompt.
@@ -801,10 +716,9 @@ behaviour.
 
 ### Override the prompts themselves (heavier)
 
-If swapping the persona isn't enough — say you want to change *what*
-the model is asked to do, not just *who's* doing it — the provider
-prompts live as plain markdown files under `prompts/<provider>/` and
-are overrideable per-user without forking the project.
+If swapping the persona isn't enough, the provider prompts live as plain
+markdown files under `prompts/<provider>/` and are overrideable per-user
+without forking the project.
 
 ### The directory layout
 
@@ -826,9 +740,7 @@ prompts.local/             ← your overrides, gitignored.
 ```
 
 At runtime `prompts.local/<provider>/<name>.md` wins; if it's absent,
-the matching `prompts/<provider>/<name>.md` is used. So you only need
-to copy the prompts you actually want to change, and `git pull` for
-upstream fixes never touches `prompts.local/`.
+the matching `prompts/<provider>/<name>.md` is used.
 
 ### A worked example: making Marvin cheerful
 
@@ -848,8 +760,7 @@ voice takes over. To revert, delete the file in `prompts.local/`.
 The shipped prompts open with an HTML comment block documenting the
 prompt's purpose, any `{placeholders}` it uses, and which Provider
 method calls it. That comment block is **stripped at load time** by
-`prompts.py`, so leaving it in your override copy is harmless — it
-won't get read aloud — and editing or deleting it is fine.
+`prompts.py`, so editing or deleting it is fine.
 
 The notification prompts use two placeholders:
 
@@ -862,7 +773,7 @@ The notification prompts use two placeholders:
 
 If your custom prompt accidentally introduces a stray `{` (a JSON
 example, say), the hook logs `<prompt format error>` and falls back to
-the unformatted template rather than crashing.
+the unformatted template.
 
 ### Just the languages, please
 
@@ -906,8 +817,7 @@ it as a Script Command out of the box.
 3. Find "Shut Marvin Up" in the list and assign a hotkey (something like
    `⌃⌥⌘.` is unlikely to clash with Teams' own shortcuts).
 
-`@raycast.mode silent` means no Raycast window pops up — the hotkey just
-kills `afplay` and gets out of the way.
+`@raycast.mode silent` means no Raycast window pops up.
 
 ### macOS Shortcuts.app
 
@@ -916,7 +826,7 @@ No Raycast needed:
 1. Open Shortcuts.app → new shortcut.
 2. Add a "Run Shell Script" action with `killall afplay 2>/dev/null`.
 3. In the shortcut's info panel (the ⓘ on the right), set a keyboard
-   shortcut. It works system-wide, including during Teams calls.
+   shortcut.
 
 ### Hammerspoon
 
@@ -935,10 +845,8 @@ Reload the config and the chord is live.
 - On Mistral, the nine-style enum assumes Jane's flavour set — other Mistral
   voices may not have all nine `_<style>` variants.
 - Markdown stripping is regex-based and unsubtle.
-- The hook blocks for roughly 2–3 seconds while the classifier and TTS
-  calls complete (noticeably longer on Kokoro). Playback itself is
-  detached and non-blocking, and `"async": true` in the hook config
-  removes the wait entirely — see
+- The hook blocks while the classifier and TTS calls complete
+  (noticeably longer on Kokoro) — see
   [Running the hook in the background](#running-the-hook-in-the-background).
 - macOS-by-default, because `afplay` is the assumed player. Set `player_command` in `config.json` to point at a different binary (e.g. `mpg123`, `ffplay`) to run elsewhere — you'll also want to override `fallback_sound` since the default points at a macOS system aiff.
 - No way to interrupt Jane mid-sentence from inside Claude Code itself —
@@ -949,8 +857,7 @@ Reload the config and the chord is live.
 
 Every Stop event gets appended to `stop-hook.log`, including the chosen
 voices, the rewritten text, and each TTS call's outcome (with byte counts
-on success or the API error body on failure). Handy when tuning prompts,
-chasing voice 404s, or working out why a clip didn't play.
+on success or the API error body on failure).
 
 The last ten turns are also kept in `/tmp/` as a pair of files:
 
@@ -958,8 +865,6 @@ The last ten turns are also kept in `/tmp/` as a pair of files:
   into a single mp3.
 - `claude-speaks-<timestamp>.txt` — each clip's voice id and the exact
   text that was spoken, separated by blank lines.
-
-Older pairs are pruned on each new run.
 
 ## Example
 
