@@ -118,7 +118,7 @@ Prompts resolve from `prompts.local/<provider>/<name>.md` before shipped `prompt
 
 ## Environment and Authentication
 
-Copy `dotenv.example` to `.env`. Existing process environment values win over `.env` because loading uses `os.environ.setdefault()`.
+Copy `dotenv.example` to `.env`. Values in `.env` win over the inherited process environment, so a stale key exported in a shell profile cannot shadow a rotated one in the dotfile.
 
 - Set the selected TTS backend key plus any key required by `llm_model`.
 - For `anthropic/...`, `CLAUDE_CODE_OAUTH_TOKEN` routes completions through the Claude Agent SDK. Do not also set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`; the dispatcher refuses the event to prevent unintended API billing.

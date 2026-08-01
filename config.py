@@ -34,6 +34,8 @@ DEFAULT_NOTIFICATION_LANGUAGES = [
 
 
 def load_env_file(path: Path = ENV_FILE) -> None:
+    """Values in .env override inherited environment — a stale key exported in
+    a shell profile must not shadow a freshly rotated one in the dotfile."""
     if not path.is_file():
         return
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -41,7 +43,7 @@ def load_env_file(path: Path = ENV_FILE) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        os.environ[key.strip()] = value.strip().strip('"').strip("'")
 
 
 _overlay_state = threading.local()

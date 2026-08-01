@@ -220,7 +220,10 @@ that ignore the field still work.
 
 - The dotfile lives next to `main.py` and is loaded by `load_env_file()`
   in `config.py` (a tiny hand-rolled parser, *not* python-dotenv). Keys
-  are `os.environ.setdefault`'d so existing env wins.
+  are assigned unconditionally so **.env wins over inherited env** — the
+  opposite of the python-dotenv default. Deliberate: a stale key exported
+  in a shell profile once shadowed a freshly rotated key in `.env` and
+  produced misleading billing errors from the old key's org.
 - `config.json` is loaded fresh on every call to `load_config()` — there's
   no caching. Fine for a hook that runs once per turn; don't add caching
   unless you have a reason.
