@@ -423,7 +423,14 @@ drifts independently). Mentioned in `prompts/openai/preamble.md` and
   emitting text — small budgets caused systematic summariser failures
   on long replies, and the raw reply got spoken instead. Each provider
   applies `cap_length(...)` to every clip it builds; keep that when
-  adding clips.
+  adding clips. One deliberate exception: Kokoro's main clip caps at
+  `provider_settings.kokoro.max_speak_chars` (default 3000) because
+  local synthesis is free and its summary prompt is two-mode: routine
+  replies still compress to under 80 words, but replies carrying
+  technical substance (trade-offs, decisions, caveats) may run to 400
+  words. See `prompts/kokoro/summary.md`. A side effect: if the
+  summariser call fails, the raw-reply fallback is also spoken up to
+  3000 chars, not 800.
 - The preamble clip is tighter: `cap_length(..., MAX_MONOLOGUE_CHARS)`
   (200 chars), and the preamble LLM output goes through `first_line()`
   before the strip chain. gpt-5.x occasionally *answers the reply*

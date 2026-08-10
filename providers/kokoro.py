@@ -4,7 +4,11 @@ Shells out to https://github.com/nazdridoy/kokoro-tts per clip (the hook is a
 fresh process each turn, so a subprocess costs the same model load an
 in-process library would). Voice ids are literal (`bm_george`, `bf_emma`);
 blends like "af_sarah:60,am_adam:40" pass straight through. No prosody tags —
-the summariser only runs on long replies, like Mistral's.
+the summariser only runs on long replies, like Mistral's. Its summary
+prompt is two-mode (routine replies compress hard, technically substantial
+ones get room), so the main clip is capped by
+provider_settings.kokoro.max_speak_chars (default 3000 chars) rather than
+the global 800.
 
 Kokoro's mp3s are 24000 Hz mono, not the 22050 Hz the stock gap files use,
 so `gap_variant = "24k"` makes audio.gap_blob stitch with gaps/*_24k.mp3.
@@ -41,6 +45,10 @@ DEFAULT_VOICES_PATH = "voices-v1.0.bin"
 DEFAULT_LANGUAGE = "en-gb"
 DEFAULT_SPEED = 1.0
 DEFAULT_TIMEOUT = 120
+# Cap for the spoken summary clip. Local synthesis costs nothing, so this is
+# roomier than the global MAX_SPEAK_CHARS; it must stay above the summary
+# prompt's 400-word ceiling or long summaries get truncated mid-sentence.
+DEFAULT_MAX_SPEAK_CHARS = 3000
 
 
 class KokoroProvider(Provider):
@@ -134,7 +142,8 @@ class KokoroProvider(Provider):
             # Single trailing ellipsis gives the TTS a natural pause before the reply.
             clips.append(Clip(cap_length(f"{preamble} ...", MAX_MONOLOGUE_CHARS), monologue_voice, self.language_for("monologue")))
         if want_main:
-            clips.append(Clip(cap_length(summary), main_voice, self.language_for("main")))
+            limit = self.settings.get("max_speak_chars", DEFAULT_MAX_SPEAK_CHARS)
+            clips.append(Clip(cap_length(summary, limit), main_voice, self.language_for("main")))
         return clips
 
     def plan_notification_clip(self) -> Clip | None:
