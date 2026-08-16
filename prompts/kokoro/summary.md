@@ -6,7 +6,9 @@ than SUMMARY_WORD_THRESHOLD words (currently 60). Short replies are spoken
 verbatim. Kokoro has no prosody tags or emotional styles. Unlike the other
 providers' summarisers this one is two-mode: routine status replies get
 aggressive compression, while replies carrying real technical substance
-(trade-offs, decisions, caveats) are given room to explain themselves.
+(trade-offs, decisions, caveats) get more room. Still a genuine summary
+though, not a light rewrite: the decision, the sharpest caveat, and any
+question survive; the evidence trail does not.
 Local synthesis is free, so the spoken clip is capped by
 provider_settings.kokoro.max_speak_chars (default 3000 chars) instead of
 the global 800; the word ceilings below are tuned to stay inside that.
@@ -23,7 +25,7 @@ First, judge the weight of the reply. There are two modes:
 
 ROUTINE: the reply reports work done, status, or a simple answer ("done, tests green", "changed the button", "the config lives here"). Compress aggressively: aim for 50 words, never exceed 80, even for a 400-word input. This is not a trim, it is aggressive compression. If the reply is long, most of it must go. That is the job.
 
-SUBSTANTIAL: the reply presents a technical decision, competing options, trade-offs, risks, traps, or a question the listener genuinely needs to think about. Take the room the substance earns: typically 100 to 300 words, never more than 400. Walk through the options, how they differ, what the consequences are, and any recommendation, so the listener can weigh the decision away from the screen. Do not pad: if the substance runs out at 120 words, stop at 120.
+SUBSTANTIAL: the reply presents a technical decision, competing options, trade-offs, risks, traps, or a question the listener genuinely needs to think about. This earns more room than ROUTINE, but it is still a summary, not a rewrite. Keep the decision, the single most consequential trade-off or trap, the recommendation, and any question the listener is being asked. Drop the evidence trail: test outputs, verification steps, the how-it-was-proved narrative, and second-order caveats. The listener needs what to weigh, not the workings; those are still in the terminal. Typically 80 to 150 words, never more than 250 even for a very long reply. Do not pad: if the substance runs out at 80 words, stop at 80.
 
 The overriding rule in either mode: problems, caveats, traps, and unresolved issues outrank the headline result. "All tests pass, but there is an unfixed race condition" must never become "All tests pass." And keep the mechanism, not just a label: "the sandbox blocks the request and the error reads like a docs outage" tells the listener something; "errors hide sandbox denial" does not.
 
@@ -61,6 +63,6 @@ Output: Fingers crossed for Mimo. What I love is how much character this packs i
 A SUBSTANTIAL example:
 
 Input: Both tests pass and the importer now handles the delimiter sniffing edge case. But before you wire the upload form to it, there is a decision to make about where the import actually runs. Right now it is inline in the controller: the request blocks while all 20,000 rows are parsed and inserted, which took 41 seconds against the staging database. That is over most proxy timeouts, so real users with real files will hit 504s and retry, and because the import is not idempotent a retry duplicates every row it managed to insert before the timeout. The alternative is a queued job: the controller stores the file, dispatches ProcessCsvImport, and returns immediately, with progress polled from a status column. That fixes the timeout and gives you retry semantics for free, since the job can be made idempotent by keying rows on a content hash. The cost is infrastructure: you need a queue worker running in every environment including the plain Docker deploys, and failed jobs need monitoring or imports will silently vanish. My lean is the queued job, but if the real files are always under a thousand rows the inline version is honestly fine. How big do the real imports get?
-Output: Both tests pass and delimiter sniffing is handled, but there is a real decision before wiring up the upload form: where the import runs. Inline in the controller it took 41 seconds for 20,000 rows, which blows past most proxy timeouts, so real users will hit 504s and retry, and since the import is not idempotent every retry duplicates the rows that already landed. A queued job fixes both: the controller stores the file and returns immediately, progress comes from a status column, and keying rows on a content hash makes retries safe. The cost is infrastructure. You need a queue worker in every environment, including the plain Docker deploys, and failed jobs need monitoring or imports will silently vanish. I lean towards the queued job, but if real files are always under a thousand rows, inline is honestly fine. How big do the real imports get?
+Output: Both tests pass, but there is a decision before wiring up the upload form: where the import runs. Inline, 20,000 rows took 41 seconds, well past most proxy timeouts, and because the import is not idempotent, the retry after a 504 duplicates every row that already landed. A queued job fixes both, at the cost of a queue worker and failed-job monitoring in every environment. I lean towards the queued job, but if real files stay under a thousand rows, inline is honestly fine. How big do the real imports get?
 
 Return only the rewritten text, nothing else.

@@ -427,8 +427,14 @@ drifts independently). Mentioned in `prompts/openai/preamble.md` and
   `provider_settings.kokoro.max_speak_chars` (default 3000) because
   local synthesis is free and its summary prompt is two-mode: routine
   replies still compress to under 80 words, but replies carrying
-  technical substance (trade-offs, decisions, caveats) may run to 400
-  words. See `prompts/kokoro/summary.md`. A side effect: if the
+  technical substance (trade-offs, decisions, caveats) may run to 250
+  words. (First cut of that mode allowed 400 and briefed "walk through
+  the options"; with a worked example retaining ~75% of its input, it
+  produced near-full rewrites, 207 words spoken for a 294-word reply.
+  Retuned 2026-08-11: keep the decision, sharpest caveat, and question;
+  drop the evidence trail. The worked example is the strongest lever —
+  the model copies its retention ratio.) See `prompts/kokoro/summary.md`.
+  A side effect: if the
   summariser call fails, the raw-reply fallback is also spoken up to
   3000 chars, not 800.
 - The preamble clip is tighter: `cap_length(..., MAX_MONOLOGUE_CHARS)`
