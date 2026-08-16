@@ -3,6 +3,7 @@
 import re
 import shlex
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,11 @@ DEFAULT_GAP = "0_75s"
 
 DEFAULT_PLAYER = "afplay"
 DEFAULT_FALLBACK_SOUND = Path("/System/Library/Sounds/Funk.aiff")
+
+# One playback at a time, machine-wide: concurrent hook invocations queue
+# on this flock (held by play_locked.py) instead of talking over each other.
+PLAYER_LOCK = AUDIO_DIR / "claude-speaks-player.lock"
+PLAY_LOCKED = PROJECT_DIR / "play_locked.py"
 
 
 def load_word_replacements() -> dict[str, str]:
@@ -89,10 +95,15 @@ def fallback_sound_path() -> Path:
 def play_audio_file(path: Path) -> subprocess.Popen | None:
     """Play a single audio file via the configured player, detached.
 
-    Returns the player process so callers that care (the hands-free arm
-    path) can wait for playback to finish; everyone else ignores it.
+    The player runs under play_locked.py, which holds an exclusive flock
+    for the duration of playback so overlapping hook invocations play in
+    sequence rather than at once. This hook still returns immediately.
+
+    Returns the wrapper process, which exits when playback finishes
+    (queue wait included), so callers that care (the hands-free arm
+    path) can wait on it; everyone else ignores it.
     """
-    argv = player_argv() + [str(path)]
+    argv = [sys.executable, str(PLAY_LOCKED), str(PLAYER_LOCK), *player_argv(), str(path)]
     try:
         return subprocess.Popen(
             argv,

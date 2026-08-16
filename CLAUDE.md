@@ -11,7 +11,8 @@ After the provider-pluggable refactor:
 ```
 main.py            ~85 lines  thin entry point: stdin → provider → audio
 llm.py            ~100 lines  LLM(model).complete(system, user) — litellm, or Agent SDK for anthropic/ + OAuth token
-audio.py          ~135 lines  stitch + play, archive rotation, word replacements
+audio.py          ~140 lines  stitch + play, archive rotation, word replacements
+play_locked.py     ~45 lines  flock wrapper the player runs under: one playback at a time, machine-wide
 config.py         ~110 lines  load_config, load_env_file, classifier_model, tts_provider, features, personas, notification_languages
 logging_util.py    ~35 lines  log, trim_log, LOG_FILE, PROJECT_DIR
 text_util.py       ~25 lines  strip_markdown, cap_length
@@ -157,6 +158,42 @@ One cosmetic trap: Kokoro's mp3s carry a Xing/LAME header, so `afinfo`
 reports a stitched file's duration as the *first clip only*. afplay
 ignores the header and plays everything — verified empirically; do not
 "fix" this.
+
+## Playback is serialised machine-wide
+
+Concurrent hook invocations (a second Claude session, a sub-agent
+finishing while a long Kokoro summary is still talking) used to spawn
+overlapping afplays. Now `audio.play_audio_file` never runs the player
+directly: it spawns a detached `sys.executable play_locked.py <lock>
+<player argv...>` child, which takes an exclusive `flock` on
+`/tmp/claude-speaks-player.lock`, runs the player, and exits when
+playback ends. Queue, not drop: a dropped clip would be a silent
+failure, and the overlapping clip is usually news the user wants.
+
+Facts to hold on to when touching this:
+
+- The flock is kernel-owned and dies with the process (pkill, kill -9,
+  crash: all release it). There is no stale-lock cleanup path because
+  none is needed. Verified empirically: two parallel 2s players took 4s
+  total; killing a lock-holding player freed the next within ~1s.
+- macOS has the `flock()` syscall but no `flock(1)` binary, which is
+  why the wrapper is Python, not a shell one-liner. It imports only
+  stdlib plus `logging_util` (same directory), because it runs as a
+  bare script under whatever `sys.executable` spawned it, outside the
+  uv project.
+- `killall afplay` (the panic-button script) only kills the *current*
+  clip; a queued wrapper then acquires the lock and starts talking.
+  The user knows and doesn't mind: their hotkey use is "not now"
+  while sat reading the reply. README documents
+  `pkill -f play_locked; killall afplay` for a full flush.
+- The wrapper caps a single playback at 600s (`PLAYER_TIMEOUT_S`) so a
+  wedged player can't hold the lock forever and silence the machine.
+- `handsfree.maybe_arm` waits on the wrapper Popen, which is still
+  correct (it exits when audio ends), but its 120s
+  `PLAYBACK_TIMEOUT_S` now also covers time spent queued behind other
+  sessions' clips. Expiry skips arming, which is the safe direction.
+- The fallback Funk.aiff goes through the same lock, so even the
+  failure beep queues rather than overlaps.
 
 ## Error handling philosophy
 

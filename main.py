@@ -1,8 +1,10 @@
 """Claude Code hook: speaks Claude's final reply on Stop, a Marvin quip on Notification.
 
 Reads stdin, picks a TTS provider via auto-discovery, asks it for clips, hands
-them to audio.play_clips. afplay is detached so the hook returns quickly. See
-providers/README.md for the contract and how to add a new backend.
+them to audio.play_clips. Playback runs detached under a machine-wide lock
+(play_locked.py) so the hook returns quickly and concurrent sessions queue
+instead of talking over each other. See providers/README.md for the contract
+and how to add a new backend.
 """
 
 import json

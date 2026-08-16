@@ -106,12 +106,11 @@ definition tells Claude Code to fire the hook and move on:
 
 Strongly recommended for Kokoro.
 
-One gotcha: with `async` on, nothing stops a quick follow-up turn
-kicking off a second run while the first is still talking, so very
-occasionally you'll hear two streams of audio at once. The
-`killall afplay` panic button in
-[Shutting Marvin up mid-sentence](#shutting-marvin-up-mid-sentence)
-silences both.
+With `async` on, a quick follow-up turn (or a second session, or a
+sub-agent finishing) can produce a second clip while the first is still
+talking. Playback is serialised through a machine-wide lock
+(`play_locked.py`), so the second clip waits its turn and plays when the
+first finishes rather than talking over it.
 
 ## Remote mode (Raspberry Pi → Mac)
 
@@ -803,6 +802,11 @@ silence in a hurry), `killall afplay` stops playback dead. Bind it to a
 hotkey and you've got a panic button. (If you've changed `player_command`
 to something other than `afplay`, swap the binary name in the commands
 and scripts below to match.)
+
+One detail: playback is queued, one clip at a time, so `killall afplay`
+only stops the clip currently talking. If another clip is waiting on the
+queue it starts straight away. To silence the queue too, kill the lock
+wrappers first: `pkill -f play_locked; killall afplay`.
 
 A ready-made script lives at `scripts/shut-marvin-up.sh`. Pick whichever of
 the three options below suits your setup.
