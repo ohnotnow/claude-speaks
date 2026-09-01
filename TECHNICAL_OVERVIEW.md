@@ -1,6 +1,6 @@
 # Technical Overview
 
-Last updated: 2026-07-24
+Last updated: 2026-09-01
 
 ## What This Is
 
@@ -9,9 +9,9 @@ Last updated: 2026-07-24
 ## Stack
 
 - Python 3.14+; dependencies and the virtual environment are managed with `uv`.
-- Direct dependencies: LiteLLM 1.83.8, ElevenLabs 2.45.0, and Claude Agent SDK 0.2.123 (versions currently locked in `uv.lock`).
+- Direct dependencies: LiteLLM 1.83.8, ElevenLabs 2.45.0, Claude Agent SDK 0.2.123, plus mlx-audio 0.5.1, misaki 0.9.4, soundfile, numpy, and a pinned `en_core_web_sm` wheel for Kokoro's MLX engine (versions currently locked in `uv.lock`; the MLX stack is imported only when that engine is selected).
 - Standard-library `http.server` provides remote mode; there is no database or web framework.
-- Cloud TTS backends: Mistral, xAI, OpenAI, and ElevenLabs. Kokoro is a local CLI backend.
+- Cloud TTS backends: Mistral, xAI, OpenAI, and ElevenLabs. Kokoro is a local backend with two engines: the `kokoro-tts` CLI subprocess (default) or in-process mlx-audio on the Apple-Silicon GPU.
 - Audio playback defaults to macOS `afplay`; `player_command` makes Linux players usable.
 
 ## Architecture at a Glance
@@ -45,6 +45,7 @@ server.py               Authenticated, fire-and-forget HTTP receiver
 config.py               Defaults, `.env`, JSON config, thread-local overlays
 llm.py                  LiteLLM / Claude Agent SDK completion adapter
 audio.py                Parallel synthesis, MP3 stitching, archive, playback
+play_locked.py          flock wrapper the player runs under; queues playback machine-wide
 handsfree.py            Optional claude-listens microphone handoff
 providers/              Provider contract, discovery, and five TTS backends
 prompts/<provider>/     Shipped provider-specific LLM system prompts
@@ -82,9 +83,9 @@ Every `providers/*.py` module is imported at startup. A module-level `PROVIDER` 
 | xAI | `XAI_API_KEY` | Always reformats so it can add inline prosody tags | Literal voices; configurable 22.05 kHz/64 kbps |
 | OpenAI | `OPENAI_API_KEY` | Summarises only over 60 words; carries role instructions | `gpt-4o-mini-tts`; configurable 22.05 kHz/56 kbps |
 | ElevenLabs | `ELEVENLABS_API_KEY` | Summarises only over 60 words | SDK; defaults to `eleven_v3`, `mp3_22050_32` |
-| Kokoro | none | Summarises only over 60 words; notifications stay single-language | Local `kokoro-tts`; fixed 24 kHz and `*_24k.mp3` gaps |
+| Kokoro | none | Summarises only over 60 words; notifications stay single-language | Local; `engine` picks `kokoro-tts` CLI or in-process MLX (model auto-fetched from HuggingFace); fixed 24 kHz and `*_24k.mp3` gaps |
 
-All providers cap main text at 800 characters and monologues at 200. Failed LLM stages fall back to raw text and prepend an audible warning where possible; partial TTS success still plays successful clips.
+Providers cap main text at 800 characters (Kokoro: 3000, configurable via `max_speak_chars`, since local synthesis is free) and monologues at 200. Failed LLM stages fall back to raw text and prepend an audible warning where possible; partial TTS success still plays successful clips.
 
 ## Configuration
 
@@ -103,7 +104,7 @@ Nested overlay objects merge key-by-key; arrays and scalar values replace. Event
 | `features` | all three `true` | Toggle `monologue`, `main`, and `notification` independently |
 | `personas` | Marvin/Marvin/null | Prompt character for monologue, notification, and main-summary preservation |
 | `voices` | provider defaults | Per-provider `main`, `monologue`, `notification` voice settings |
-| `provider_settings` | `{}` | Backend-specific model, output, path, rate, speed, and timeout settings |
+| `provider_settings` | `{}` | Backend-specific engine, model, output, path, rate, speed, and timeout settings |
 | `notification_languages` | weighted seven-language list | LLM language selection for cloud-provider notifications |
 | `gap_file` | `0_75s` | Separator basename from `gaps/`, without `.mp3` |
 | `word_replacements` | `{}` | Case-insensitive phonetic substitutions immediately before TTS |
@@ -139,7 +140,7 @@ Copy `dotenv.example` to `.env`. Values in `.env` win over the inherited process
 
 - Successful audio is written as `/tmp/claude-speaks-<timestamp>.mp3` with a companion `.txt` containing voice and final spoken text. The newest ten pairs are retained.
 - Stitching is raw MP3 byte concatenation, not decoding/remuxing. The provider output must match its gap sample rate. A missing provider-specific gap produces no silence rather than risking truncated playback.
-- Playback is a detached subprocess. Asynchronous Claude hooks can overlap and speak simultaneously; `scripts/shut-marvin-up.sh` stops `afplay` playback.
+- Playback is a detached subprocess running under `play_locked.py`, which holds an exclusive machine-wide flock so concurrent hook invocations queue rather than speak over each other; a single playback is capped at 600 seconds. `scripts/shut-marvin-up.sh` stops the current `afplay` clip; a queued clip then starts, and `pkill -f play_locked; killall afplay` is the full flush.
 - `stop-hook.log` is project-local, grows to 1 MB, then retains roughly the newest 500 KB. Provider imports, request payloads/overrides, voice choices, timings, and failures are logged.
 - `notification-history.txt` retains ten generated lines to reduce repetition. Both runtime files are gitignored.
 
@@ -159,7 +160,7 @@ uv run scripts/poke-server.py --health
 uv run scripts/poke-server.py -m "Can you hear me?"
 ```
 
-Configure Claude Code `Stop` and `Notification` hooks to run `uv run --project /absolute/path /absolute/path/main.py`. Adding `"async": true` avoids blocking Claude Code, especially with Kokoro, but permits overlapping playback.
+Configure Claude Code `Stop` and `Notification` hooks to run `uv run --project /absolute/path /absolute/path/main.py`. Adding `"async": true` avoids blocking Claude Code, especially with Kokoro; concurrent clips queue on the playback lock rather than overlap.
 
 The repository ships editable launchd and systemd user-service templates in `scripts/`. Use a user service so the process has access to the logged-in audio session. On Linux, replace `afplay` and usually the fallback sound.
 

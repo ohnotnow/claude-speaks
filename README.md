@@ -532,6 +532,19 @@ When `tts_provider` is `kokoro`:
 - Playback is stitched with the 24 kHz gap files (`gaps/*_24k.mp3`)
   automatically — see [Gaps between clips](#gaps-between-clips).
 
+#### The mlx engine (Apple Silicon)
+
+Setting `"provider_settings": {"kokoro": {"engine": "mlx"}}` swaps the
+kokoro-tts CLI for [mlx-audio](https://github.com/Blaizzy/mlx-audio)
+running in-process on the GPU. Same voices, same 24 kHz output; the
+model (`mlx-community/Kokoro-82M-bf16` by default, overridable via
+`provider_settings.kokoro.mlx_model`) is fetched from HuggingFace into
+`~/.cache/huggingface` on first use. Compared with the CLI engine it
+loads in about half a second instead of ~7s per clip and uses roughly a
+tenth of the CPU, which your fans will notice on long summaries. Steps
+1 and 2 above aren't needed for mlx, and voice blends aren't supported;
+step 3 still applies.
+
 Example kokoro config:
 
 ```json
@@ -563,6 +576,8 @@ xAI exposes its output format, and Kokoro its paths and pacing:
     "bit_rate": 64000
   },
   "kokoro": {
+    "engine": "cli",
+    "mlx_model": "mlx-community/Kokoro-82M-bf16",
     "cli_path": "kokoro-tts",
     "model_path": "kokoro-v1.0.onnx",
     "voices_path": "voices-v1.0.bin",
@@ -578,7 +593,9 @@ you also swap the gap files — see [Gaps between clips](#gaps-between-clips)
 for what happens if they don't agree. Kokoro's relative paths resolve
 against the claude-speaks directory (absolute paths work too), `language`
 is the accent used when a voice doesn't set its own, and `timeout` is the
-per-clip synthesis cap in seconds.
+per-clip synthesis cap in seconds. `cli_path`, `model_path`,
+`voices_path`, and `timeout` only apply to the `cli` engine; `mlx_model`
+only to `mlx`.
 
 ### Adding a TTS provider
 

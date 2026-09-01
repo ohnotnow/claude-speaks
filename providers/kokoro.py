@@ -1,9 +1,17 @@
-"""Kokoro TTS provider — local synthesis via the kokoro-tts CLI, no API key.
+"""Kokoro TTS provider — local synthesis, no API key. Two engines:
 
-Shells out to https://github.com/nazdridoy/kokoro-tts per clip (the hook is a
-fresh process each turn, so a subprocess costs the same model load an
-in-process library would). Voice ids are literal (`bm_george`, `bf_emma`);
-blends like "af_sarah:60,am_adam:40" pass straight through. No prosody tags —
+- cli (default): shells out to https://github.com/nazdridoy/kokoro-tts,
+  a fresh subprocess per clip, each paying the ~7s CPU-heavy onnxruntime
+  model load.
+- mlx (provider_settings.kokoro.engine: "mlx"): in-process mlx-audio on
+  the Apple-Silicon GPU. Same voice pack, ~0.5s model load (fetched from
+  HuggingFace into ~/.cache/huggingface on first use), and about a tenth
+  of the CPU burn: measured 86 CPU-seconds (cli) vs 7.5 (mlx) for a 90s
+  clip on an M1. One model per process, clips generated under a lock;
+  generation runs at roughly 6x real time.
+
+Voice ids are literal (`bm_george`, `bf_emma`) and shared by both engines;
+blends like "af_sarah:60,am_adam:40" are cli-only. No prosody tags —
 the summariser only runs on long replies, like Mistral's. Its summary
 prompt is two-mode (routine replies compress hard, technically substantial
 ones get room), so the main clip is capped by
@@ -16,8 +24,11 @@ The mp3s also carry a Xing header, so afinfo reports a stitched file's
 duration as just the first clip — playback is unaffected.
 """
 
+import io
 import subprocess
 import tempfile
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -49,6 +60,30 @@ DEFAULT_TIMEOUT = 120
 # roomier than the global MAX_SPEAK_CHARS; it must stay above the summary
 # prompt's 400-word ceiling or long summaries get truncated mid-sentence.
 DEFAULT_MAX_SPEAK_CHARS = 3000
+
+DEFAULT_ENGINE = "cli"
+MLX_DEFAULT_MODEL = "mlx-community/Kokoro-82M-bf16"
+# Kokoro pipeline language codes, keyed by the CLI-style tags used in config.
+# Anything unmapped falls back to British English; non-English codes need the
+# matching misaki extra installed (e.g. misaki[ja] for Japanese).
+MLX_LANG_CODES = {
+    "en-gb": "b",
+    "en-us": "a",
+    "es": "e",
+    "fr": "f",
+    "fr-fr": "f",
+    "hi": "h",
+    "it": "i",
+    "ja": "j",
+    "pt-br": "p",
+    "zh": "z",
+}
+
+# One model per process, shared across clips. Generation is serialised
+# because mlx-audio's pipeline is not thread-safe and play_clips
+# synthesises in parallel threads; at ~6x real time, sequential is cheap.
+_MLX_LOCK = threading.Lock()
+_MLX_MODEL = None
 
 
 class KokoroProvider(Provider):
@@ -166,6 +201,81 @@ class KokoroProvider(Provider):
         return Clip(cap_length(line), self.voice_for("notification"), self.language_for("notification"))
 
     def synthesise(self, clip: Clip) -> bytes | None:
+        engine = self.settings.get("engine", DEFAULT_ENGINE)
+        if engine == "mlx":
+            return self._synthesise_mlx(clip)
+        if engine != DEFAULT_ENGINE:
+            log(f"<kokoro> unknown engine {engine!r}; using cli")
+        return self._synthesise_cli(clip)
+
+    def _clip_language(self, clip: Clip) -> str:
+        # The base class defaults language to "en"; kokoro wants a concrete
+        # dialect, so bare "en" becomes the configurable default (en-gb).
+        language = clip.language or "en"
+        if language == "en":
+            language = self.settings.get("language", DEFAULT_LANGUAGE)
+        return language
+
+    def _synthesise_mlx(self, clip: Clip) -> bytes | None:
+        global _MLX_MODEL
+        try:
+            import numpy as np
+            import soundfile as sf
+            from mlx_audio.tts import load as load_mlx_model
+        except Exception as exc:
+            log(f"<kokoro mlx error> import failed: {exc!r} (deps missing? try `uv sync`)")
+            return None
+
+        language = self._clip_language(clip)
+        lang_code = MLX_LANG_CODES.get(language.lower())
+        if lang_code is None:
+            log(f"<kokoro mlx> no lang code for {language!r}; using en-gb")
+            lang_code = MLX_LANG_CODES[DEFAULT_LANGUAGE]
+        model_id = self.settings.get("mlx_model", MLX_DEFAULT_MODEL)
+        speed = self.settings.get("speed", DEFAULT_SPEED)
+
+        try:
+            with _MLX_LOCK:
+                if _MLX_MODEL is None:
+                    t0 = time.perf_counter()
+                    _MLX_MODEL = load_mlx_model(model_id)
+                    log(f"<kokoro mlx> loaded {model_id} in {time.perf_counter() - t0:.1f}s")
+                t0 = time.perf_counter()
+                chunks = []
+                sample_rate = 24000
+                for chunk in _MLX_MODEL.generate(
+                    text=clip.text, voice=clip.voice, speed=float(speed), lang_code=lang_code
+                ):
+                    chunks.append(np.asarray(chunk.audio))
+                    sample_rate = chunk.sample_rate
+                gen_s = time.perf_counter() - t0
+        except BaseException as exc:
+            # BaseException, not Exception: misaki's G2P setup calls
+            # spacy.cli.download when the en_core_web_sm model package is
+            # missing, and that raises SystemExit(1) in a pip-less uv venv.
+            log(f"<kokoro mlx error> {exc!r} voice={clip.voice}")
+            return None
+
+        if not chunks:
+            log(f"<kokoro mlx error> no audio produced voice={clip.voice}")
+            return None
+        if sample_rate != 24000:
+            # gap_variant pins stitching to the 24 kHz gap files; a mismatch
+            # would silently truncate playback at the first gap.
+            log(f"<kokoro mlx> unexpected sample rate {sample_rate}; gaps may truncate")
+
+        audio = np.concatenate(chunks)
+        buf = io.BytesIO()
+        sf.write(buf, audio, sample_rate, format="MP3")
+        result = buf.getvalue()
+        log(
+            f"<kokoro mlx synth> voice={clip.voice} lang={lang_code} "
+            f"text_words={len(clip.text.split())} text_chars={len(clip.text)} "
+            f"audio_s={len(audio) / sample_rate:.1f} gen_s={gen_s:.1f} audio_bytes={len(result)}"
+        )
+        return result
+
+    def _synthesise_cli(self, clip: Clip) -> bytes | None:
         cli = self.settings.get("cli_path", DEFAULT_CLI)
         # Relative paths resolve against the project dir, not the hook's CWD
         # (which is wherever Claude Code was launched). Absolute paths pass through.
@@ -173,11 +283,7 @@ class KokoroProvider(Provider):
         voices = str(PROJECT_DIR / self.settings.get("voices_path", DEFAULT_VOICES_PATH))
         speed = self.settings.get("speed", DEFAULT_SPEED)
         timeout = self.settings.get("timeout", DEFAULT_TIMEOUT)
-        # The base class defaults language to "en"; kokoro wants a concrete
-        # dialect, so bare "en" becomes the configurable default (en-gb).
-        language = clip.language or "en"
-        if language == "en":
-            language = self.settings.get("language", DEFAULT_LANGUAGE)
+        language = self._clip_language(clip)
 
         with tempfile.TemporaryDirectory(prefix="claude-speaks-kokoro-") as tmp:
             text_path = Path(tmp) / "clip.txt"

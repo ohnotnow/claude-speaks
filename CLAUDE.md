@@ -25,7 +25,7 @@ providers/
   xai.py          ~195 lines  full xAI implementation
   openai.py       ~255 lines  OpenAI TTS implementation
   elevenlabs.py   ~170 lines  ElevenLabs implementation
-  kokoro.py       ~215 lines  local Kokoro (kokoro-tts CLI subprocess, no API key)
+  kokoro.py       ~330 lines  local Kokoro, no API key (cli subprocess or in-process mlx engine)
   README.md                   guide for adding a new provider
 prompts/
   README.md                   pointer file for end-users (override mechanism)
@@ -43,8 +43,11 @@ personas.local/               gitignored; user persona files drop in here (flat,
 
 - Python 3.14, dependencies managed via `uv` (`pyproject.toml`, `uv.lock`).
   Run with `uv run main.py`. Third-party deps: `litellm`, `elevenlabs`,
-  `claude-agent-sdk` (the last imported lazily — only anthropic/ +
-  OAuth-token users pay its startup cost).
+  `claude-agent-sdk`, plus `mlx-audio` / `misaki[en]` / `soundfile` /
+  `numpy` / the pinned `en-core-web-sm` wheel for kokoro's mlx engine.
+  The agent SDK and the mlx stack are imported lazily: only anthropic/ +
+  OAuth-token users pay the former's startup cost, only engine=mlx pays
+  the latter's.
 - Invoked by Claude Code as a hook — reads a JSON payload on stdin, returns
   nothing meaningful on stdout. The user wires it up in
   `~/.claude/settings.json` for two events: `Stop` and `Notification`.
@@ -93,6 +96,23 @@ The contract is in `providers/base.py`. Worked examples:
   Model files (`kokoro-v1.0.onnx`, `voices-v1.0.bin`) live gitignored in
   the project root; paths configurable via `provider_settings.kokoro`,
   relative ones resolved against PROJECT_DIR, not CWD.
+  Since 2026-09-01 kokoro has a second engine:
+  `provider_settings.kokoro.engine = "mlx"` (the user's setting) runs
+  mlx-audio in-process on the GPU instead. Same voice ids (blends are
+  cli-only); model `mlx-community/Kokoro-82M-bf16` via `mlx_model`,
+  auto-fetched to the HF cache on first use. Measured on the M1: 86
+  CPU-seconds (cli) vs 7.5 (mlx) for a 90s clip, model load 0.5s vs ~7s.
+  Facts that cost time to learn: generation is serialised under a
+  module-level lock because the pipeline is not thread-safe and
+  play_clips synthesises in parallel threads (at ~6x real time,
+  sequential is cheap); output is soundfile-encoded 24 kHz mp3, so
+  gap_variant is unchanged; and misaki's English G2P raises
+  SystemExit, not an Exception, when the `en_core_web_sm` spacy model
+  package is missing, because spacy.cli.download shells out to pip and
+  uv venvs have no pip. That model wheel is therefore a pinned URL
+  dependency in pyproject.toml, and the mlx synth path catches
+  BaseException so the failure is logged and audible rather than a
+  silently dead thread.
 
 When adding a new provider, see `providers/README.md` for the contract,
 the skeleton, and the gotchas.

@@ -64,7 +64,9 @@
       "bit_rate": 56000
     },
     "kokoro": {
-      "_note": "Local provider, no API key. Outputs 24 kHz mp3, stitched with the gaps/*_24k.mp3 variants automatically. voice blends work too: \"af_sarah:60,am_adam:40\". max_speak_chars caps the spoken summary clip; synthesis is free locally, so the default is roomier than the 800-char cap the API providers use, letting the two-mode summary prompt speak technically substantial replies at length.",
+      "_note": "Local provider, no API key. Outputs 24 kHz mp3, stitched with the gaps/*_24k.mp3 variants automatically. max_speak_chars caps the spoken summary clip; synthesis is free locally, so the default is roomier than the 800-char cap the API providers use, letting the two-mode summary prompt speak technically substantial replies at length. engine picks the synthesis backend: \"cli\" shells out to kokoro-tts (onnxruntime on the CPU; voice blends like \"af_sarah:60,am_adam:40\" work here), \"mlx\" runs mlx-audio in-process on the Apple-Silicon GPU (much lighter on CPU/fans, ~0.5s model load, model auto-downloaded from HuggingFace to ~/.cache/huggingface on first use). cli_path/model_path/voices_path/timeout apply to the cli engine only; mlx_model applies to mlx only.",
+      "engine": "cli",
+      "mlx_model": "mlx-community/Kokoro-82M-bf16",
       "cli_path": "kokoro-tts",
       "max_speak_chars": 3000,
       "model_path": "kokoro-v1.0.onnx",
